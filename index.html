@@ -604,7 +604,7 @@ function doPost(e) {
       <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Mark as</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
         <button onclick="setStatusFromModal('FREE')" style="height:36px;border-radius:9px;background:#67C23A;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">✓ FREE</button>
-        <button onclick="setStatusFromModal('BUSY')" style="height:36px;border-radius:9px;background:#E54863;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">✕ BUSY</button>
+        <button onclick="openSlotModalFromNoteModal()" style="height:36px;border-radius:9px;background:#E54863;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">✕ BUSY</button>
         <button onclick="setStatusFromModal('TENTATIVE')" style="height:36px;border-radius:9px;background:#F4A62A;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">⏱ Tentative</button>
         <button onclick="openAllotFlow()" style="height:36px;border-radius:9px;background:#8E63D2;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">👤 Allot</button>
       </div>
@@ -1176,6 +1176,16 @@ function removeDate(){
   closeModal();renderCal();updateSidebar();refreshOpenPanels(artist);toast('Date cleared');
 }
 function closeModal(){document.getElementById('note-modal-wrap').classList.remove('open');activeDate=null;allotBride=null;showModalSection('main');}
+
+// When user clicks BUSY from the per-date note modal, close it and open the slot time-picker instead
+function openSlotModalFromNoteModal(){
+  var artist=document.getElementById('artist-sel').value;
+  if(!artist||!activeDate)return;
+  var ds=activeDate;
+  document.getElementById('note-modal-wrap').classList.remove('open');
+  // don't null activeDate yet — slot confirm needs it via slotModalDates
+  openSlotModal(artist,[ds]);
+}
 document.getElementById('note-modal-wrap').addEventListener('click',function(e){if(e.target===this)closeModal();});
 
 function updateSidebar(){
@@ -1284,23 +1294,55 @@ function updateSidebar(){
   }).join('');
 }
 
-// ── Artist Slots sidebar panel ─────────────────────
+// ── Artist Slots sidebar panel — monthly busy summary ──
 function renderArtistSlotsPanel(artist, ds){
   var sub=document.getElementById('artist-slots-sub');
   var list=document.getElementById('artist-slots-list');
-  if(!artist){sub.textContent='Select an artist and tap a date to see time-slot status';list.innerHTML='';return;}
-  if(!ds){sub.textContent='Tap a date on the calendar to see '+artist+"'s time slots";list.innerHTML='';return;}
-  var d=new Date(ds+'T00:00:00');
-  sub.textContent=artist+' — '+d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
-  var rec=getAv(artist,ds);
-  if(rec&&(rec.status==='ALLOT'||rec.status==='LEAVE')){
-    list.innerHTML='<div style="font-size:12px;color:#8E63D2;font-weight:700;padding:6px 0">'+rec.status+' all day'+(rec.note?' — '+esc(rec.note):'')+'</div>';
+  if(!artist){
+    sub.textContent='Select an artist to see their busy slots this month';
+    list.innerHTML='';
     return;
   }
-  list.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:6px">'+RT_SLOTS.map(function(s){
-    var busy=getSlot(artist,ds,s)==='BUSY';
-    return '<span style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;background:'+(busy?'#FFD6DC':'#E8F5DC')+';color:'+(busy?'#9B1A2F':'#3B6D11')+'">'+s+(busy?' 🔴':' 🟢')+'</span>';
-  }).join('')+'</div>';
+
+  sub.textContent=artist+' — '+MONTHS[vm]+' '+vy+' busy slots';
+
+  var dim=new Date(vy,vm+1,0).getDate();
+  var rows=[];
+  for(var dnum=1;dnum<=dim;dnum++){
+    var dateStr=vy+'-'+String(vm+1).padStart(2,'0')+'-'+String(dnum).padStart(2,'0');
+    var rec=getAv(artist,dateStr);
+    var busySlots=getBusySlots(artist,dateStr);
+    // Full day allot/leave/full-busy (no specific slots)
+    var allDay=rec&&(rec.status==='ALLOT'||rec.status==='LEAVE'||(rec.status==='BUSY'&&!busySlots.length));
+    if(!allDay&&!busySlots.length)continue;
+    var d=new Date(dateStr+'T00:00:00');
+    var dayLabel=d.toLocaleDateString('en-IN',{day:'numeric',month:'short',weekday:'short'});
+    rows.push({dateStr,dayLabel,rec,busySlots,allDay});
+  }
+
+  if(!rows.length){
+    list.innerHTML='<div style="font-size:12px;color:#aaa;padding:6px 0">No busy slots marked in '+MONTHS[vm]+'</div>';
+    return;
+  }
+
+  list.innerHTML=rows.map(function(r){
+    var isHighlighted=r.dateStr===ds;
+    var border=isHighlighted?'#A3365A':'#F1E0E5';
+    var bg=isHighlighted?'#FFF0F5':'#FFF8FA';
+    var html='<div style="background:'+bg+';border:1.5px solid '+border+';border-radius:10px;padding:8px 10px;margin-bottom:7px">';
+    html+='<div style="font-size:11px;font-weight:800;color:#A3365A;margin-bottom:5px">'+r.dayLabel+'</div>';
+    if(r.allDay){
+      var st=r.rec.status;
+      var color=STATUS_DOT[st]||'#E54863';
+      html+='<span style="font-size:10px;font-weight:700;background:'+color+'22;color:'+color+';border-radius:5px;padding:2px 8px">'+st+' ALL DAY'+(r.rec.note?' — '+esc(r.rec.note):'')+'</span>';
+    } else {
+      html+='<div style="display:flex;flex-wrap:wrap;gap:4px">'+r.busySlots.map(function(s){
+        return '<span style="font-size:10px;font-weight:700;background:#FFD6DC;color:#9B1A2F;border-radius:6px;padding:2px 7px">'+s+' 🔴</span>';
+      }).join('')+'</div>';
+    }
+    html+='</div>';
+    return html;
+  }).join('');
 }
 
 // ── Artist Unavailable page ────────────────────────

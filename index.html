@@ -1,3 +1,4 @@
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
@@ -82,6 +83,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .sync-overlay-bar{height:5px;background:#A3365A;width:100%}
 .sync-overlay-bar.animating{animation:syncbar 1.8s infinite linear}
 @keyframes syncbar{0%{width:0%}100%{width:100%}}
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 .sync-overlay-body{padding:14px 18px;display:flex;align-items:center;gap:12px;font-size:13px;font-weight:600}
 .sync-ov-load{background:#fff;color:#0C447C;border:1.5px solid #B5D4F4}
 .sync-ov-ok{background:#EAF3DE;color:#27500A;border:1.5px solid #C0DD97}
@@ -166,6 +168,61 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:9px 22px;border-radius:20px;font-size:13px;font-weight:500;opacity:0;transition:opacity 0.25s;pointer-events:none;z-index:9999;white-space:nowrap}
 .toast.show{opacity:1}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+
+/* ============ MOBILE / PHONE MODE ============ */
+@media (max-width:760px){
+  .outer{padding:10px 6px}
+  .dashboard{padding:12px;border-radius:14px}
+
+  .top-header{gap:8px}
+  .brand{gap:8px}
+  .brand-logo,.brand-logo img{width:36px;height:36px}
+  .brand-title{font-size:14px}
+  .brand-sub{font-size:9.5px}
+  .header-right{width:100%;justify-content:space-between}
+  .sync-badge,.refresh-btn{font-size:11px;padding:6px 9px}
+
+  .nav-tabs{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .nav-tabs::-webkit-scrollbar{display:none}
+  .ntab{padding:8px 10px;font-size:12px;white-space:nowrap;flex-shrink:0}
+
+  .body-layout{grid-template-columns:1fr;gap:14px}
+
+  .artist-row{flex-direction:column;align-items:stretch;gap:8px}
+  .artist-avatar{display:none}
+  .artist-sel-wrap{min-width:0;width:100%}
+  .artist-sel-wrap select{height:46px;font-size:13px}
+  .month-nav{justify-content:center;width:100%}
+  .today-btn{width:100%;height:38px}
+
+  .cal-dh{font-size:9.5px;padding:6px 2px}
+  .dc{min-height:56px;padding:4px}
+  .dc-num{font-size:10.5px;margin-bottom:2px}
+  .dc-pill{font-size:8.5px;padding:1px 5px;gap:2px}
+  .dc-bride{font-size:8px}
+  .dc-ev{font-size:7.5px}
+  .dc-loc,.dc-rt,.dc-note{font-size:7.5px}
+  .multi-b{font-size:7.5px;padding:1px 5px}
+
+  .action-hint{font-size:11px}
+  .action-bar{grid-template-columns:1fr 1fr;gap:6px}
+  .abtn{height:40px;font-size:12px}
+  .abtn-clear{grid-column:1 / -1;height:38px}
+
+  .score-grid{grid-template-columns:1fr 1fr}
+  .score-n{font-size:22px}
+
+  .sidebar{gap:10px}
+  .scard{padding:12px}
+
+  .note-modal-wrap{padding:14px}
+  .note-modal{width:100%;max-width:340px}
+
+  .sync-overlay{min-width:0;width:90vw}
+
+  #avail-expand{margin:8px 0 4px}
+  #ae-body{padding:12px 10px 10px}
+}
 </style>
 
 <div class="outer">
@@ -181,12 +238,13 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
     </div>
     <div class="header-right">
       <div class="sync-badge not-connected" id="sync-badge"><i class="ti ti-unlink" style="font-size:14px" aria-hidden="true"></i><span id="sync-text">Not connected</span></div>
-      <button class="refresh-btn" id="sync-btn" onclick="switchPage('settings')"><i class="ti ti-refresh" style="font-size:14px" aria-hidden="true"></i><span>Sync data</span></button>
+      <button class="refresh-btn" id="sync-btn" onclick="syncNow()"><i class="ti ti-refresh" style="font-size:14px" aria-hidden="true"></i><span>Sync data</span></button>
     </div>
   </div>
 
   <div class="nav-tabs">
     <button class="ntab active" onclick="switchPage('calendar')"><i class="ti ti-calendar" style="font-size:14px;vertical-align:-2px;margin-right:4px" aria-hidden="true"></i>Calendar</button>
+    <button class="ntab" onclick="switchPage('pdfs')"><i class="ti ti-file-type-pdf" style="font-size:14px;vertical-align:-2px;margin-right:4px" aria-hidden="true"></i>Client PDFs</button>
     <button class="ntab" onclick="switchPage('unavail')"><i class="ti ti-user-x" style="font-size:14px;vertical-align:-2px;margin-right:4px" aria-hidden="true"></i>Artist Unavailable</button>
     <button class="ntab" onclick="switchPage('settings')"><i class="ti ti-settings" style="font-size:14px;vertical-align:-2px;margin-right:4px" aria-hidden="true"></i>Settings &amp; Connect</button>
   </div>
@@ -201,6 +259,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
           <div class="artist-sel-wrap">
             <select id="artist-sel" onchange="onArtistChange()">
               <option value="">— select artist —</option>
+              <optgroup label="Makeup & Hair Artists">
               <option>Anitashil</option><option>Anshul</option><option>Avni</option><option>Babita</option><option>Beena ji</option>
               <option>Bhakti Panchal</option><option>Devangi</option><option>Ekta</option><option>Hamida</option>
               <option>Hayat</option><option>Hetal</option><option>Ishani</option><option>Javed Ali</option>
@@ -217,6 +276,16 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
               <option>Tuba</option><option>Tyra</option><option>Vaishali</option><option>Vanita</option>
               <option>Vidya</option><option>Vidya sion</option><option>Vilapa</option><option>Vinni</option>
               <option>Yamini</option><option>Yogita</option>
+              </optgroup>
+              <optgroup label="Content Creator">
+              <option>Moksha</option><option>Shadab</option><option>Khushi Jain</option><option>Sonam</option>
+              </optgroup>
+              <optgroup label="Drappist">
+              <option>Tejas</option><option>Alpa</option><option>Pallavi</option><option>Lata Drappist</option><option>Kiran</option>
+              </optgroup>
+              <optgroup label="Assistant">
+              <option>Situ</option><option>Poonam</option>
+              </optgroup>
             </select>
           </div>
           <div class="month-nav">
@@ -296,6 +365,17 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- CLIENT PDFs PAGE -->
+  <div id="page-pdfs" style="display:none">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+      <div style="font-size:18px;font-weight:800;color:#222">Client PDFs</div>
+      <button onclick="loadPdfs()" style="height:36px;padding:0 18px;border-radius:9px;background:#A3365A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer">⟳ Load / Refresh</button>
+      <input id="pdf-search" oninput="filterPdfs()" placeholder="Search by name..." style="height:36px;padding:0 12px;border-radius:9px;border:1.5px solid #ECECEC;font-size:13px;min-width:200px">
+    </div>
+    <div id="pdf-status" style="font-size:12px;color:#999;margin-bottom:12px"></div>
+    <div id="pdf-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px"></div>
   </div>
 
   <!-- ARTIST UNAVAILABLE PAGE -->
@@ -387,6 +467,36 @@ var SS_ID   = '';        // ← leave blank: script uses active spreadsheet
 var RESP_SHEET  = 'Responses';
 var AVAIL_SHEET = 'Artist Availability';
 var DATES_SHEET = 'BOOKING_DATES';
+// PDF URL read from Drive folder, matched by filename in column AV (index 47)
+var _pdfCache = null;
+function buildPdfCache() {
+  if (_pdfCache) return _pdfCache;
+  _pdfCache = {};
+  try {
+    var folder = DriveApp.getFolderById('1bClP7P7OoilreV175TMqUBlhdlyH52Gc');
+    var files  = folder.getFiles();
+    while (files.hasNext()) {
+      var f = files.next();
+      var key = f.getName().replace(/\.pdf$/i,'').trim().toLowerCase();
+      _pdfCache[key] = 'https://drive.google.com/file/d/' + f.getId() + '/view';
+    }
+  } catch(e) { Logger.log('PDF folder: ' + e); }
+  return _pdfCache;
+}
+
+function getPdfUrl(row) {
+  // col AV (index 47) holds the PDF filename — match it against Drive folder
+  var filename = String(row[47] || '').replace(/\.pdf$/i,'').trim().toLowerCase();
+  if (!filename) return '';
+  var cache = buildPdfCache();
+  if (cache[filename]) return cache[filename];
+  // Partial match
+  var keys = Object.keys(cache);
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i].indexOf(filename) !== -1 || filename.indexOf(keys[i]) !== -1) return cache[keys[i]];
+  }
+  return '';
+}
 
 // Column indices (0-based) in Responses tab
 // X=23 Y=24 Z=25 AA=26 AB=27 AC=28 AD=29 AE=30 AF=31 AG=32
@@ -403,6 +513,11 @@ var EVENT_PAIRS = [
 function parseEventDetails(raw) {
   var result = { eventName: '', makeupBy: '', location: '', readyTime: '' };
   if (!raw || raw.trim() === '') return result;
+
+  // Normalise all RT / Ready Time variants → "RT - "
+  // Handles: RT-, RT -, RT- , Ready Time-, Ready Time -, ready time-, "Ready Time -" etc.
+  raw = raw.replace(/ready\s*time\s*[-–]\s*/gi, 'RT - ');
+  raw = raw.replace(/\bRT\s*[-–]\s*/gi, 'RT - ');
 
   // Split on comma — each segment is "Key - Value"
   var segments = raw.split(',');
@@ -439,8 +554,8 @@ function ensureSheets(ss) {
   var datesSheet = ss.getSheetByName(DATES_SHEET);
   if (!datesSheet) {
     datesSheet = ss.insertSheet(DATES_SHEET);
-    datesSheet.getRange(1,1,1,9).setValues([
-      ['Date','BrideName','EventNo','EventName','Location','ReadyTime','Month','Year','BookingID']
+    datesSheet.getRange(1,1,1,10).setValues([
+      ['Date','BrideName','EventNo','EventName','Location','ReadyTime','Month','Year','BookingID','PdfUrl']
     ]);
   }
   var availSheet = ss.getSheetByName(AVAIL_SHEET);
@@ -460,7 +575,8 @@ function rebuildBookingDates() {
 
   var data        = resp.getDataRange().getValues();        // for dates & names
   var displayData = resp.getDataRange().getDisplayValues(); // for free-text detail cols (keeps RT as "12 PM")
-  var rows = [['Date','BrideName','EventNo','EventName','Location','ReadyTime','Month','Year','BookingID']];
+  // col AV (index 47) = PDF file URL uploaded via Google Form
+  var rows = [['Date','BrideName','EventNo','EventName','Location','ReadyTime','Month','Year','BookingID','PdfUrl']];
 
   for (var i = 1; i < data.length; i++) {
     var row        = data[i];
@@ -477,6 +593,8 @@ function rebuildBookingDates() {
       var dateStr = formatDate(rawDate);
       var dt = (rawDate instanceof Date) ? rawDate : new Date(rawDate);
 
+      // Read PDF URL directly from column AV (index 47)
+      var pdfUrl = getPdfUrl(row);
       rows.push([
         dateStr,
         brideName,
@@ -486,17 +604,49 @@ function rebuildBookingDates() {
         parsed.readyTime,
         isNaN(dt) ? '' : dt.getMonth() + 1,
         isNaN(dt) ? '' : dt.getFullYear(),
-        String(row[1] || '')   // col B = Booking ID
+        String(row[1] || ''),  // col B = Booking ID
+        pdfUrl
       ]);
     });
   }
 
   sheets.datesSheet.clearContents();
-  sheets.datesSheet.getRange(1, 1, rows.length, 9).setValues(rows);
+  sheets.datesSheet.getRange(1, 1, rows.length, 10).setValues(rows);
 }
 
 // ── doGet — returns JSON for the tracker ──────────
 function doGet(e) {
+  var action = e && e.parameter && e.parameter.action ? e.parameter.action : 'sync';
+
+  // ── Return PDF list from Drive folder ──────────────
+  if (action === 'pdfs') {
+    try {
+      var folder = DriveApp.getFolderById('1bClP7P7OoilreV175TMqUBlhdlyH52Gc');
+      var files  = folder.getFiles();
+      var pdfs   = [];
+      while (files.hasNext()) {
+        var f = files.next();
+        var name = f.getName();
+        if (name.toLowerCase().indexOf('.pdf') !== -1) {
+          // Make file viewable by anyone with link
+          try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(ex) {}
+          pdfs.push({
+            name: name.replace(/\.pdf$/i,''),
+            url:  'https://drive.google.com/file/d/' + f.getId() + '/view',
+            id:   f.getId()
+          });
+        }
+      }
+      pdfs.sort(function(a,b){return a.name.localeCompare(b.name);});
+      return ContentService
+        .createTextOutput(JSON.stringify({ok:true, pdfs:pdfs}))
+        .setMimeType(ContentService.MimeType.JSON);
+    } catch(err) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ok:false, error:String(err)}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  }
   try {
     var ss = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
     ensureSheets(ss);
@@ -515,7 +665,8 @@ function doGet(e) {
         eventNo:   String(r[2]),
         eventName: String(r[3]),
         location:  String(r[4]),
-        readyTime: String(r[5])
+        readyTime: String(r[5]),
+        pdfUrl:    String(r[9] || '')   // col J = PDF URL
       });
     }
 
@@ -617,7 +768,7 @@ function doPost(e) {
       <button onclick="closeAllotFlow()" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
     </div>
 
-    <!-- ALLOT FLOW: MA / HA selection -->
+    <!-- ALLOT FLOW: MA / HA / Drappist / Assistant / Content Creator selection -->
     <div id="allot-role-section" style="display:none;margin-top:12px">
       <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Allotting for</div>
       <div id="allot-selected-bride" style="font-size:13px;font-weight:700;color:#A3365A;margin-bottom:10px"></div>
@@ -625,7 +776,20 @@ function doPost(e) {
         <button onclick="confirmAllot('MA')" style="height:48px;border-radius:12px;background:#A3365A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">MA</button>
         <button onclick="confirmAllot('HA')" style="height:48px;border-radius:12px;background:#6B3A8A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">HA</button>
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px">
+        <button onclick="confirmAllot('DR')" style="height:44px;border-radius:12px;background:#0C447C;color:#fff;border:none;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:0.3px">Drappist</button>
+        <button onclick="confirmAllot('AST')" style="height:44px;border-radius:12px;background:#3B6D11;color:#fff;border:none;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:0.3px">Assistant</button>
+        <button onclick="confirmAllot('CC')" style="height:44px;border-radius:12px;background:#B5720A;color:#fff;border:none;font-size:11px;font-weight:800;cursor:pointer;letter-spacing:0.2px">Content Creator</button>
+      </div>
       <button onclick="backToBrides()" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
+    </div>
+
+    <!-- ALLOT FLOW: Form link to fill after MA/HA confirmed -->
+    <div id="allot-link-section" style="display:none;margin-top:12px;text-align:center">
+      <div style="font-size:24px;margin-bottom:6px">✅</div>
+      <div id="allot-link-msg" style="font-size:13px;font-weight:700;color:#222;margin-bottom:14px">Allotted! Please fill the form:</div>
+      <a id="allot-form-btn" href="#" target="_blank" rel="noopener" style="display:block;height:48px;line-height:48px;border-radius:12px;color:#fff;text-decoration:none;font-size:14px;font-weight:800;letter-spacing:0.3px">📝 Fill Form</a>
+      <button onclick="closeModal()" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">Done</button>
     </div>
 
     <div class="note-modal-btns" id="modal-main-btns">
@@ -650,6 +814,15 @@ function doPost(e) {
       <button onclick="confirmSlotBusy()" style="flex:1;height:46px;border-radius:11px;background:#E54863;color:#fff;border:none;font-size:14px;font-weight:800;cursor:pointer">Mark Busy on selected slots</button>
       <button onclick="closeSlotModal()" style="height:46px;padding:0 18px;border-radius:11px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:13px;font-weight:700;cursor:pointer">Cancel</button>
     </div>
+  </div>
+</div>
+
+<!-- SYNC STATUS OVERLAY -->
+<div id="sync-overlay" class="sync-overlay">
+  <div id="sync-ov-bar" class="sync-overlay-bar animating"></div>
+  <div class="sync-overlay-body">
+    <span id="sync-ov-msg" style="flex:1">Syncing...</span>
+    <button onclick="hideSyncOverlay()" style="background:none;border:none;font-size:18px;cursor:pointer;color:#999;line-height:1">×</button>
   </div>
 </div>
 
@@ -721,11 +894,13 @@ function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace
 
 function switchPage(p){
   document.getElementById('page-calendar').style.display=p==='calendar'?'':'none';
+  document.getElementById('page-pdfs').style.display=p==='pdfs'?'':'none';
   document.getElementById('page-unavail').style.display=p==='unavail'?'':'none';
   document.getElementById('page-settings').style.display=p==='settings'?'':'none';
-  var idx=p==='calendar'?0:(p==='unavail'?1:2);
+  var idx=p==='calendar'?0:p==='pdfs'?1:p==='unavail'?2:3;
   document.querySelectorAll('.ntab').forEach((t,i)=>t.classList.toggle('active',i===idx));
   if(p==='unavail')renderUnavailPage();
+  if(p==='pdfs')loadPdfs();
 }
 
 function saveUrl(){
@@ -737,6 +912,53 @@ function saveUrl(){
   updateConnectionStatus(true);
   toast('URL saved!');
 }
+
+function syncNow(){
+  if(!gasUrl){
+    switchPage('settings');
+    toast('Paste your Web App URL in Step 1 first, then click Sync');
+    return;
+  }
+  var btn=document.getElementById('sync-btn');
+  btn.innerHTML='<i class="ti ti-loader-2" style="font-size:14px;animation:spin .8s linear infinite" aria-hidden="true"></i><span>Syncing...</span>';
+  btn.disabled=true;
+  showSyncOverlay('Syncing from Google Sheets...','load');
+  fetch(gasUrl)
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(data){
+      if(!data.ok)throw new Error(data.error||'Sheet returned error');
+      if(data.bookings){bookings=cleanBookings(data.bookings);try{localStorage.setItem('bmp_bk6',JSON.stringify(bookings));}catch(e){}}
+      if(data.avail){data.avail.forEach(function(r){if(r.artist&&r.date)avail[akey(r.artist,r.date)]={status:r.status,note:r.note||''};});save();}
+      renderCal();updateSidebar();updateConnectionStatus(true);
+      var withPdf2=bookings.filter(function(b){return b.pdfUrl;}).length;
+      showSyncOverlay('Synced! '+bookings.length+' bookings · '+withPdf2+' PDFs found','ok');
+      resetSyncBtn();
+    })
+    .catch(function(err){
+      hideSyncOverlay();
+      resetSyncBtn();
+      switchPage('settings');
+      toast('Auto-sync blocked — use the manual copy-paste method below');
+      sbar('Auto-sync failed. Click Open GAS URL, copy everything, paste below','err');
+    });
+}
+function resetSyncBtn(){
+  var btn=document.getElementById('sync-btn');
+  btn.innerHTML='<i class="ti ti-refresh" style="font-size:14px" aria-hidden="true"></i><span>Sync data</span>';
+  btn.disabled=false;
+}
+function showSyncOverlay(msg,tp){
+  var ov=document.getElementById('sync-overlay');if(!ov)return;
+  document.getElementById('sync-ov-msg').textContent=msg;
+  var bar=document.getElementById('sync-ov-bar');
+  ov.className='sync-overlay show';
+  ov.style.background=tp==='load'?'#fff':tp==='ok'?'#EAF3DE':'#FFF1F3';
+  ov.style.border='1.5px solid '+(tp==='load'?'#B5D4F4':tp==='ok'?'#C0DD97':'#FFD6DC');
+  bar.className='sync-overlay-bar'+(tp==='load'?' animating':'');
+  bar.style.background=tp==='load'?'#A3365A':tp==='ok'?'#67C23A':'#E54863';
+  if(tp==='ok')setTimeout(hideSyncOverlay,2500);
+}
+function hideSyncOverlay(){var ov=document.getElementById('sync-overlay');if(ov)ov.className='sync-overlay';}
 
 function openGasUrl(){
   if(!gasUrl){toast('Save your URL in Step 1 first');return;}
@@ -754,7 +976,8 @@ function loadPastedData(){
   if(data.avail){data.avail.forEach(function(r){if(r.artist&&r.date)avail[akey(r.artist,r.date)]={status:r.status,note:r.note||''};});save();}
   document.getElementById('paste-input').value='';
   renderCal();updateSidebar();
-  var msg='✓ Loaded! '+bookings.length+' booking date'+(bookings.length!==1?'s':'')+' now on the calendar';
+  var withPdf=bookings.filter(function(b){return b.pdfUrl;}).length;
+  var msg='Loaded! '+bookings.length+' booking date'+(bookings.length!==1?'s':'')+' on the calendar · '+withPdf+' with PDF links';
   ps.innerHTML='<div style="padding:10px;background:#EAF3DE;border-radius:10px;color:#27500A;font-size:13px;font-weight:600">'+msg+'</div>';
   var badge=document.getElementById('sync-badge');
   badge.className='sync-badge';
@@ -853,7 +1076,34 @@ function updateHint(){
 var allotBride=null;
 
 // All artists list (matches dropdown)
-var ALL_ARTISTS=['Anitashil','Anshul','Avni','Babita','Beena ji','Bhakti Panchal','Devangi','Ekta','Hamida','Hayat','Hetal','Ishani','Javed Ali','Jyoti Mandhare','Jyotinath','Karishma','Kavita','Khushboo','Lata','Madhu','Malika','Manisha','Meenaji','Meenal','Mini','Mohini','Nehal','Nilofer','Nisha','Pariksha','Payal','Pinky','Pooja','Poonam','Pramila','Priya','Rajeshwari','Ravleen','Reeta','Rika','Ritika','Saba','Sana','Sandeep','Sapana','Sayyam','Shifa','Shruti','Shubham','Siddhi','Simran K','Sittu','Tripti','Tuba','Tyra','Vaishali','Vanita'];
+var ALL_ARTISTS=['Anitashil','Anshul','Avni','Babita','Beena ji','Bhakti Panchal','Devangi','Ekta','Hamida','Hayat','Hetal','Ishani','Javed Ali','Jyoti Mandhare','Jyotinath','Karishma','Kavita','Khushboo','Lata','Madhu','Malika','Manisha','Meenaji','Meenal','Mini','Mohini','Nehal','Nilofer','Nisha','Pariksha','Payal','Pinky','Pooja','Poonam','Pramila','Priya','Rajeshwari','Ravleen','Reeta','Rika','Ritika','Saba','Sana','Sandeep','Sapana','Sayyam','Shifa','Shruti','Shubham','Siddhi','Simran K','Sittu','Tripti','Tuba','Tyra','Vaishali','Vanita','Vidya','Vidya sion','Vilapa','Vinni','Yamini','Yogita','Moksha','Shadab','Khushi Jain','Sonam','Situ','Tejas','Alpa','Pallavi','Lata Drappist','Kiran'];
+
+var CATEGORY_LABELS={MUA:'Makeup & Hair Artists',CC:'Content Creator',DR:'Drappist',AST:'Assistant'};
+var CATEGORY_ORDER=['MUA','CC','DR','AST'];
+var CATEGORY_MEMBERS={
+  CC:['Moksha','Shadab','Khushi Jain','Sonam'],
+  DR:['Tejas','Alpa','Pallavi','Lata Drappist','Kiran'],
+  AST:['Situ']
+};
+function getArtistCategory(name){
+  if(CATEGORY_MEMBERS.CC.indexOf(name)>=0) return 'CC';
+  if(CATEGORY_MEMBERS.DR.indexOf(name)>=0) return 'DR';
+  if(CATEGORY_MEMBERS.AST.indexOf(name)>=0) return 'AST';
+  return 'MUA';
+}
+function renderCatGroups(items, getName, renderChip){
+  var groups={MUA:[],CC:[],DR:[],AST:[]};
+  items.forEach(function(it){ groups[getArtistCategory(getName(it))].push(it); });
+  var out='';
+  CATEGORY_ORDER.forEach(function(cat){
+    if(!groups[cat].length) return;
+    out += '<div style="font-size:9px;color:#999;font-weight:700;margin:6px 0 3px;text-transform:uppercase;letter-spacing:.6px;opacity:.85">'+CATEGORY_LABELS[cat]+' <span style="opacity:.7">('+groups[cat].length+')</span></div>';
+    out += '<div style="display:flex;flex-wrap:wrap;margin-bottom:2px">';
+    groups[cat].forEach(function(it){ out += renderChip(it); });
+    out += '</div>';
+  });
+  return out;
+}
 
 function showAvailExpand(ds, activeSlot) {
   lastAEDate = ds; lastAESlot = activeSlot || null;
@@ -899,7 +1149,7 @@ function showAvailExpand(ds, activeSlot) {
     html += '<div style="margin-bottom:14px;padding:10px 14px;background:#FFF0F5;border-radius:12px;border:1.5px solid #F4C0D1">';
     html += '<div style="font-size:10px;font-weight:800;color:#A3365A;margin-bottom:7px;text-transform:uppercase;letter-spacing:.8px">📋 Bride Bookings This Day</div>';
     brides.forEach(function(b){
-      html += '<div style="font-size:12px;color:#72243E;padding:3px 0;border-bottom:1px solid #F9D9E7;line-height:1.5"><b>'+esc(b.bride)+'</b> <span style="color:#A3365A;font-weight:600">'+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</span>'+(b.location?'<span style="color:#888;font-size:11px"> · 📍'+esc(b.location)+'</span>':'')+(b.readyTime?'<span style="color:#A3365A;font-size:11px;font-weight:700"> · ⏰'+esc(b.readyTime)+'</span>':'')+'</div>';
+      html += '<div style="font-size:12px;color:#72243E;padding:4px 0;border-bottom:1px solid #F9D9E7;line-height:1.6"><b>'+esc(b.bride)+'</b> <span style="color:#A3365A;font-weight:600">'+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</span>'+(b.location?'<span style="color:#888;font-size:11px"> · 📍'+esc(b.location)+'</span>':'')+(b.readyTime?'<span style="color:#A3365A;font-size:11px;font-weight:700"> · ⏰'+esc(b.readyTime)+'</span>':'')+(b.pdfUrl?' <a href="'+b.pdfUrl+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:#C0392B;text-decoration:none;background:#FFECEC;border:1.5px solid #F4C0C0;border-radius:6px;padding:1px 7px;vertical-align:middle">📄 PDF</a>':'')+'</div>';
     });
     html += '</div>';
   }
@@ -924,16 +1174,12 @@ function showAvailExpand(ds, activeSlot) {
 
   if (free.length) {
     html += '<div style="font-size:10px;color:#27500A;font-weight:700;margin-bottom:4px;opacity:.7">MARKED FREE</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;margin-bottom:8px">';
-    free.forEach(function(a){ html += chip(a,'#1A6B00','#E8F5DC','#B5DD97','✓ '); });
-    html += '</div>';
+    html += renderCatGroups(free, function(a){return a;}, function(a){ return chip(a,'#1A6B00','#E8F5DC','#B5DD97','✓ '); });
   }
 
   if (notMarked.length) {
     html += '<div style="font-size:10px;color:#555;font-weight:700;margin-bottom:4px;opacity:.7">NOT YET MARKED</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;">';
-    notMarked.forEach(function(a){ html += chip(a,'#444','#F5F5F5','#DEDEDE',''); });
-    html += '</div>';
+    html += renderCatGroups(notMarked, function(a){return a;}, function(a){ return chip(a,'#444','#F5F5F5','#DEDEDE',''); });
   }
 
   if (!totalAvail) {
@@ -945,20 +1191,18 @@ function showAvailExpand(ds, activeSlot) {
   if (tentative.length) {
     html += '<div style="margin-bottom:12px;padding:10px 14px;background:#FFFBF0;border-radius:12px;border:1.5px solid #FFE0A0">';
     html += '<div style="font-size:10px;font-weight:800;color:#7A4E00;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">⚠️ Tentative — '+tentative.length+'</div>';
-    html += '<div style="display:flex;flex-wrap:wrap">';
-    tentative.forEach(function(a){ html += chip(a.name,'#7A4E00','#FFF3DC','#FFD580',''); });
-    html += '</div></div>';
+    html += renderCatGroups(tentative, function(a){return a.name;}, function(a){ return chip(a.name,'#7A4E00','#FFF3DC','#FFD580',''); });
+    html += '</div>';
   }
 
   // ── Busy / Allotted ─────────────────────────────
   if (busy.length) {
     html += '<div style="padding:10px 14px;background:#FFF5F7;border-radius:12px;border:1.5px solid #F4C0D1">';
     html += '<div style="font-size:10px;font-weight:800;color:#8B1A2E;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🔴 Busy / Allotted — '+busy.length+'</div>';
-    html += '<div style="display:flex;flex-wrap:wrap">';
-    busy.forEach(function(a){
-      html += '<span style="display:inline-flex;align-items:center;background:#FDE8ED;border:1.5px solid #F4B8C5;border-radius:20px;padding:5px 13px;font-size:12px;font-weight:600;color:#C0687D;margin:3px;text-decoration:line-through;opacity:.65">'+esc(a.name)+'</span>';
+    html += renderCatGroups(busy, function(a){return a.name;}, function(a){
+      return '<span style="display:inline-flex;align-items:center;background:#FDE8ED;border:1.5px solid #F4B8C5;border-radius:20px;padding:5px 13px;font-size:12px;font-weight:600;color:#C0687D;margin:3px;text-decoration:line-through;opacity:.65">'+esc(a.name)+'</span>';
     });
-    html += '</div></div>';
+    html += '</div>';
   }
 
   html += '<div style="font-size:10px;color:#bbb;margin-top:10px;text-align:center">💡 Tap any artist name to select them on the calendar</div>';
@@ -1010,7 +1254,13 @@ function showModalSection(s){
   document.getElementById('modal-main-btns').style.display=s==='main'?'':'none';
   document.getElementById('allot-bride-section').style.display=s==='bride'?'':'none';
   document.getElementById('allot-role-section').style.display=s==='role'?'':'none';
+  document.getElementById('allot-link-section').style.display=s==='link'?'':'none';
 }
+
+var ALLOT_FORM_LINKS={
+  MA:'https://docs.google.com/forms/d/e/1FAIpQLScd8RFBUnL-BrjTYSbI6nPcIw933aHy68FBedFpvMoih0Tr3w/viewform?usp=sharing&ouid=115736569450159975045',
+  HA:'https://docs.google.com/forms/d/e/1FAIpQLSfNmN3lq45w8TXUKjemjMXOSv5C9W3NUMIRFEsf9xvJInxrxw/viewform?usp=sharing&ouid=115736569450159975045'
+};
 
 function setStatusFromModal(status){
   var artist=document.getElementById('artist-sel').value;
@@ -1062,8 +1312,23 @@ function confirmAllot(role){
   setAv(artist,activeDate,'ALLOT',noteText);
   clearSlotsForArtistDate(artist,activeDate);
   if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText})});
-  closeModal();renderCal();updateSidebar();refreshOpenPanels(artist);
+  renderCal();updateSidebar();refreshOpenPanels(artist);
   toast('Allotted as '+role+(allotBride?' for '+allotBride.bride:''));
+  if(ALLOT_FORM_LINKS[role]){
+    showAllotFormLink(role);
+  } else {
+    closeModal();
+  }
+}
+
+function showAllotFormLink(role){
+  var link=ALLOT_FORM_LINKS[role];
+  var btn=document.getElementById('allot-form-btn');
+  btn.href=link||'#';
+  btn.textContent='📝 Fill '+role+' Form';
+  btn.style.background=role==='MA'?'#A3365A':'#6B3A8A';
+  document.getElementById('allot-link-msg').textContent='Allotted as '+role+(allotBride?' for '+allotBride.bride:'')+'. Please fill the form:';
+  showModalSection('link');
 }
 
 function markSel(status){
@@ -1215,7 +1480,7 @@ function updateSidebar(){
     bl.innerHTML=mb.map(function(b){
       var d=parseBookingDate(b.date);
       var ds=d?d.getDate()+' '+MON3[d.getMonth()]:'';
-      return '<div class="bride-item"><div class="bride-date-pill">'+ds+'</div><div><div class="bride-name-t">'+esc(b.bride)+'</div><div class="bride-event-t">'+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</div>'+(b.location?'<div style="font-size:10px;color:#666;margin-top:1px">📍 '+esc(b.location)+'</div>':'')+(b.readyTime?'<div style="font-size:10px;color:#A3365A;font-weight:600;margin-top:1px">⏰ RT: '+esc(b.readyTime)+'</div>':'')+'</div></div>';
+      return '<div class="bride-item"><div class="bride-date-pill">'+ds+'</div><div><div class="bride-name-t">'+esc(b.bride)+'</div><div class="bride-event-t">'+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</div>'+(b.location?'<div style="font-size:10px;color:#666;margin-top:1px">📍 '+esc(b.location)+'</div>':'')+(b.readyTime?'<div style="font-size:10px;color:#A3365A;font-weight:600;margin-top:1px">⏰ RT: '+esc(b.readyTime)+'</div>':'')+(b.pdfUrl?'<a href="'+b.pdfUrl+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:3px;margin-top:4px;font-size:10px;font-weight:700;color:#C0392B;text-decoration:none;background:#FFECEC;border:1.5px solid #F4C0C0;border-radius:6px;padding:2px 8px">📄 View PDF</a>':'')+'</div></div>';
     }).join('');
   }
 
@@ -1254,9 +1519,10 @@ function updateSidebar(){
         // Extract MA/HA from note if ALLOT
         var roleTag='';
         if(a.status==='ALLOT'){
-          var roleMatch=a.note.match(/\b(MA|HA)\b/);
+          var roleMatch=a.note.match(/\b(MA|HA|DR|AST|CC)\b/);
           var role=roleMatch?roleMatch[1]:'';
-          var roleColor=role==='MA'?'#A3365A':'#6B3A8A';
+          var ROLE_COLORS={MA:'#A3365A',HA:'#6B3A8A',DR:'#0C447C',AST:'#3B6D11',CC:'#B5720A'};
+          var roleColor=ROLE_COLORS[role]||'#666';
           roleTag=role?'<span style="display:inline-block;background:'+roleColor+';color:#fff;font-size:10px;font-weight:800;border-radius:6px;padding:1px 7px;margin-left:5px;letter-spacing:0.5px">'+role+'</span>':'';
           return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0">'
             +'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+statusColor+';flex-shrink:0"></span>'
@@ -1273,7 +1539,7 @@ function updateSidebar(){
       }).join('');
 
       var brideRows=bridesOnDay.map(function(b){
-        return '<div style="font-size:10px;color:#A3365A;font-weight:600;padding:1px 0 1px 14px">'+esc(b.bride)+' — '+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</div>'+(b.location?'<div style="font-size:9.5px;color:#666;padding:0 0 0 14px">📍 '+esc(b.location)+'</div>':'')+(b.readyTime?'<div style="font-size:9.5px;color:#A3365A;padding:0 0 2px 14px">⏰ RT: '+esc(b.readyTime)+'</div>':'');
+        return '<div style="font-size:10px;color:#A3365A;font-weight:600;padding:1px 0 1px 14px">'+esc(b.bride)+' — '+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</div>'+(b.location?'<div style="font-size:9.5px;color:#666;padding:0 0 0 14px">📍 '+esc(b.location)+'</div>':'')+(b.readyTime?'<div style="font-size:9.5px;color:#A3365A;padding:0 0 2px 14px">⏰ RT: '+esc(b.readyTime)+'</div>':'')+(b.pdfUrl?'<a href="'+b.pdfUrl+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:3px;margin:2px 0 3px 14px;font-size:10px;font-weight:700;color:#C0392B;text-decoration:none;background:#FFECEC;border:1.5px solid #F4C0C0;border-radius:6px;padding:2px 8px">📄 PDF</a>':'');
       }).join('');
 
       return '<div class="bride-item" style="align-items:flex-start">'
@@ -1345,7 +1611,48 @@ function renderArtistSlotsPanel(artist, ds){
   }).join('');
 }
 
-// ── Artist Unavailable page ────────────────────────
+// ── Client PDFs tab ────────────────────────────────
+var _allPdfs = [];
+function loadPdfs() {
+  if (!gasUrl) {
+    document.getElementById('pdf-status').textContent = 'Connect your GAS URL in Settings first';
+    return;
+  }
+  document.getElementById('pdf-status').textContent = 'Loading PDFs from Drive...';
+  document.getElementById('pdf-grid').innerHTML = '<div style="color:#aaa;font-size:13px;padding:20px">Fetching...</div>';
+  fetch(gasUrl + '?action=pdfs')
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      if (!data.ok) throw new Error(data.error || 'Error');
+      _allPdfs = data.pdfs || [];
+      document.getElementById('pdf-status').textContent = _allPdfs.length + ' PDFs found in Drive folder';
+      renderPdfGrid(_allPdfs);
+    })
+    .catch(function(err) {
+      document.getElementById('pdf-status').textContent = 'Failed to load: ' + err.message;
+      document.getElementById('pdf-grid').innerHTML = '<div style="color:#E54863;font-size:13px;padding:20px">Could not fetch PDFs. Check Settings & redeploy GAS.</div>';
+    });
+}
+function filterPdfs() {
+  var q = document.getElementById('pdf-search').value.trim().toLowerCase();
+  renderPdfGrid(q ? _allPdfs.filter(function(p){ return p.name.toLowerCase().indexOf(q) !== -1; }) : _allPdfs);
+}
+function renderPdfGrid(list) {
+  if (!list.length) { document.getElementById('pdf-grid').innerHTML = '<div style="color:#aaa;padding:20px">No PDFs found</div>'; return; }
+  document.getElementById('pdf-grid').innerHTML = list.map(function(p) {
+    var initials = p.name.split(' ').slice(0,2).map(function(w){return w[0]||'';}).join('').toUpperCase();
+    return '<a href="'+p.url+'" target="_blank" rel="noopener" style="display:flex;flex-direction:column;align-items:center;gap:8px;background:#fff;border:1.5px solid #F1E0E5;border-radius:14px;padding:16px 12px;text-decoration:none;transition:box-shadow .15s;cursor:pointer" onmouseover="this.style.boxShadow=\'0 4px 18px rgba(163,54,90,.13)\'" onmouseout="this.style.boxShadow=\'none\'">'
+      + '<div style="width:52px;height:66px;background:linear-gradient(135deg,#A3365A,#C06080);border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0">'
+      + '<span style="font-size:20px">📄</span>'
+      + '<span style="font-size:10px;font-weight:800;color:#fff;margin-top:2px">PDF</span>'
+      + '</div>'
+      + '<div style="font-size:12px;font-weight:700;color:#222;text-align:center;word-break:break-word;line-height:1.3">'+esc(p.name)+'</div>'
+      + '<div style="font-size:10px;color:#A3365A;font-weight:600;background:#FBE8EF;border-radius:5px;padding:2px 8px">Click to open</div>'
+      + '</a>';
+  }).join('');
+}
+
+
 var unavM=new Date().getMonth(), unavY=new Date().getFullYear();
 function changeUnavailMonth(d){unavM+=d;if(unavM>11){unavM=0;unavY++;}if(unavM<0){unavM=11;unavY--;}renderUnavailPage();}
 function renderUnavailPage(){

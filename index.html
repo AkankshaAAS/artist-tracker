@@ -835,7 +835,8 @@ var avail={},bookings=[];
 var slotAvail={}; // key: artist||date||slot -> 'BUSY'
 var RT_SLOTS=['9 AM','10 AM','11 AM','12 PM','1 PM','2 PM','3 PM','4 PM','5 PM','6 PM','7 PM','8 PM'];
 var lastAEDate=null, lastAESlot=null; // tracks currently-open Who's Available panel
-var gasUrl='';
+var DEFAULT_GAS_URL='https://script.google.com/macros/s/AKfycbx_Zgr4fGlAYgtjVx-9Mm58ECd7K82yea3cT4J-X6mz0uCkhseeilCDQSo95dNJG0MV/exec';
+var gasUrl=DEFAULT_GAS_URL;
 var MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 var MON3=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 var DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -874,7 +875,9 @@ function cleanBookings(arr) {
 try{var sv=localStorage.getItem('bmp_v6');if(sv)avail=JSON.parse(sv);}catch(e){}
 try{var bv=localStorage.getItem('bmp_bk6');if(bv){bookings=cleanBookings(JSON.parse(bv));}}catch(e){}
 try{var slv=localStorage.getItem('bmp_slots_v1');if(slv)slotAvail=JSON.parse(slv);}catch(e){}
-try{var uv=localStorage.getItem('bmp_url6');if(uv){gasUrl=uv;document.getElementById('url-input').value=uv;updateConnectionStatus(true);}}catch(e){}
+try{var uv=localStorage.getItem('bmp_url6');if(uv)gasUrl=uv;}catch(e){}
+document.getElementById('url-input').value=gasUrl;
+updateConnectionStatus(true);
 
 function save(){try{localStorage.setItem('bmp_v6',JSON.stringify(avail));}catch(e){}}
 function saveSlots(){try{localStorage.setItem('bmp_slots_v1',JSON.stringify(slotAvail));}catch(e){}}
@@ -963,6 +966,24 @@ function hideSyncOverlay(){var ov=document.getElementById('sync-overlay');if(ov)
 function openGasUrl(){
   if(!gasUrl){toast('Save your URL in Step 1 first');return;}
   window.open(gasUrl,'_blank');
+}
+
+// Runs automatically on page load using the built-in Web App URL.
+// Fails silently (keeps whatever was cached before) so a blocked/offline
+// visitor still sees the last-loaded data instead of an error banner.
+function autoSyncOnLoad(){
+  if(!gasUrl) return;
+  fetch(gasUrl)
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(data){
+      if(!data.ok)throw new Error(data.error||'Sheet returned error');
+      if(data.bookings){bookings=cleanBookings(data.bookings);try{localStorage.setItem('bmp_bk6',JSON.stringify(bookings));}catch(e){}}
+      if(data.avail){data.avail.forEach(function(r){if(r.artist&&r.date)avail[akey(r.artist,r.date)]={status:r.status,note:r.note||''};});save();}
+      renderCal();updateSidebar();updateConnectionStatus(true);
+    })
+    .catch(function(err){
+      console.warn('Auto-sync on load failed, showing last cached data:',err);
+    });
 }
 
 function loadPastedData(){
@@ -1702,5 +1723,6 @@ function renderUnavailPage(){
 
 if(!gasUrl)updateConnectionStatus(false);
 renderCal();updateSidebar();
+autoSyncOnLoad();
 
 </script>

@@ -452,14 +452,141 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
         </div>
         <div style="background:#1e1e2e;border-radius:10px;padding:14px;font-family:monospace;font-size:11px;color:#cdd6f4;overflow-x:auto;white-space:pre;line-height:1.7">// ═══════════════════════════════════════════════════
 // ARTIST AVAILABILITY TRACKER — Apps Script
-// Sheet: Sales Bridal Response Sheet > Responses tab
+// Sheet: Sales Bridal Response Sheet &gt; Responses tab
 // ═══════════════════════════════════════════════════
 
 var SS_ID   = '';        // ← leave blank: script uses active spreadsheet
 var RESP_SHEET  = 'Responses';
 var AVAIL_SHEET = 'Artist Availability';
 var DATES_SHEET = 'BOOKING_DATES';
-// PDF URL read from Drive folder, matched by filename in column AV (index 47)
+var EMAIL_SHEET = 'Artist Emails';
+
+// ── Form response lookup ─────────────────────────────
+// Reads the actual submitted MA/HA form response (once the artist fills it
+// in) so the quotation PDF can include Charges, Lashes, Lenses, Travel, etc.
+// — fields that don't exist until the form is actually submitted.
+var MA_RESPONSE_SHEET_ID = '1OxyPIbnwDqkRnidc-75wM5PHX8wBhKzbPZCxOhSryMo';
+var MA_RESPONSE_TAB = 'MA Responses';
+var HA_RESPONSE_SHEET_ID = '1OxyPIbnwDqkRnidc-75wM5PHX8wBhKzbPZCxOhSryMo';
+var HA_RESPONSE_TAB = 'HA Responses';
+
+// Column order (0-based) as submitted by Google Forms — matches:
+// Timestamp, Event Date, Booking ID, Artist Name, Client Name, Location,
+// Makeup/Hairstyle for, No. of Sider/Bride/Groom, No. of Events,
+// Charges Approved per Look, Total payable Charges, Lashes, Lenses,
+// Travel, Additional Information, Payment Type
+var RESPONSE_COLS = {
+  timestamp:0, eventDate:1, bookingId:2, artistName:3, clientName:4, location:5,
+  serviceFor:6, siderCount:7, eventCount:8, chargesPerLook:9, totalPayable:10,
+  lashes:11, lenses:12, travel:13, additionalInfo:14, paymentType:15
+};
+
+function findFormResponse(role, artistName, clientName, eventDateStr) {
+  var sheetId = role === 'HA' ? HA_RESPONSE_SHEET_ID : MA_RESPONSE_SHEET_ID;
+  var tabName = role === 'HA' ? HA_RESPONSE_TAB : MA_RESPONSE_TAB;
+  if (!sheetId) return null;
+  try {
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheet = ss.getSheetByName(tabName);
+    if (!sheet) return null;
+    var data = sheet.getDataRange().getValues();
+    var artistLc = String(artistName || '').trim().toLowerCase();
+    var clientLc = String(clientName || '').trim().toLowerCase();
+    var fallback = null;
+    // Search newest-first so the latest submission wins if there are re-submissions
+    for (var i = data.length - 1; i &gt;= 1; i--) {
+      var r = data[i];
+      var rowArtist = String(r[RESPONSE_COLS.artistName] || '').trim().toLowerCase();
+      var rowClient = String(r[RESPONSE_COLS.clientName] || '').trim().toLowerCase();
+      if (rowArtist !== artistLc || rowClient !== clientLc) continue;
+      var rowDate = String(r[RESPONSE_COLS.eventDate] || '').trim();
+      var obj = {
+        serviceFor:     String(r[RESPONSE_COLS.serviceFor] || ''),
+        siderCount:     String(r[RESPONSE_COLS.siderCount] || ''),
+        eventCount:     String(r[RESPONSE_COLS.eventCount] || ''),
+        chargesPerLook: String(r[RESPONSE_COLS.chargesPerLook] || ''),
+        totalPayable:   String(r[RESPONSE_COLS.totalPayable] || ''),
+        lashes:         String(r[RESPONSE_COLS.lashes] || ''),
+        lenses:         String(r[RESPONSE_COLS.lenses] || ''),
+        travel:         String(r[RESPONSE_COLS.travel] || ''),
+        additionalInfo: String(r[RESPONSE_COLS.additionalInfo] || ''),
+        paymentType:    String(r[RESPONSE_COLS.paymentType] || '')
+      };
+      if (rowDate === eventDateStr) return obj; // exact date match — best case
+      if (!fallback) fallback = obj;            // else fall back to most recent artist+client match
+    }
+    return fallback;
+  } catch(e) {
+    Logger.log('findFormResponse error: ' + e);
+    return null;
+  }
+}
+
+// ── Quotation PDF generation ────────────────────────
+// Builds a branded PDF from HTML (Apps Script can convert an HTML blob to PDF
+// directly — no external library needed) and saves it into a dedicated Drive
+// folder so it has a permanent, shareable link visible to everyone.
+function getOrCreateQuotationsFolder() {
+  var folders = DriveApp.getFoldersByName('Artist Quotations');
+  if (folders.hasNext()) return folders.next();
+  return DriveApp.createFolder('Artist Quotations');
+}
+
+function buildQuotationPdfBlob(d) {
+  var roleLabels = {MA:'Makeup Artist', HA:'Hair Artist', DR:'Drappist', AST:'Assistant', CC:'Content Creator'};
+  var roleLabel = roleLabels[d.role] || d.role;
+  var fr = d.formResponse; // extra fields from the submitted form, if found
+
+  var extraHtml = '';
+  if (fr) {
+    var forLabel = d.role === 'HA' ? 'Hairstyle For' : 'Makeup For';
+    extraHtml += row(forLabel, fr.serviceFor);
+    extraHtml += row('No. of Sider/Bride/Groom', fr.siderCount);
+    extraHtml += row('No. of Events', fr.eventCount);
+    extraHtml += row('Charges Approved per Look', fr.chargesPerLook);
+    extraHtml += row('Total Payable Charges', fr.totalPayable);
+    if (fr.lashes) extraHtml += row('Lashes', fr.lashes);
+    if (fr.lenses) extraHtml += row('Lenses', fr.lenses);
+    if (fr.travel) extraHtml += row('Travel', fr.travel);
+    if (fr.paymentType) extraHtml += row('Payment Type', fr.paymentType);
+    if (fr.additionalInfo) extraHtml += row('Additional Information', fr.additionalInfo);
+  } else {
+    extraHtml += '&lt;div style="margin-top:6px;padding:10px 14px;background:#FFF8EC;border:1px solid #FDE8C3;border-radius:8px;font-size:11px;color:#7A4E00"&gt;Awaiting form submission — charges, lashes/lenses, travel, and other details will appear here once the artist fills the form.&lt;/div&gt;';
+  }
+
+  var html = ''
+    + '&lt;html&gt;&lt;body style="font-family:Helvetica,Arial,sans-serif;color:#222;margin:0;padding:0"&gt;'
+    + '&lt;div style="background:#A3365A;color:#fff;padding:24px 32px"&gt;'
+    + '&lt;div style="font-size:22px;font-weight:bold"&gt;Assignment Quotation&lt;/div&gt;'
+    + '&lt;div style="font-size:12px;margin-top:4px"&gt;Artist Availability Tracker&lt;/div&gt;'
+    + '&lt;/div&gt;'
+    + '&lt;div style="padding:28px 32px"&gt;'
+    + row('Artist Name', d.artist)
+    + row('Role', roleLabel + ' (' + d.role + ')')
+    + row('Client / Bride', d.bride || '—')
+    + (d.eventNo || d.eventName ? row('Event', d.eventNo + (d.eventName ? ' — ' + d.eventName : '')) : '')
+    + row('Date', d.date)
+    + (d.readyTime ? row('Ready Time (RT)', d.readyTime) : '')
+    + row('Location', d.location || '—')
+    + extraHtml
+    + '&lt;div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:10px;color:#999;font-style:italic"&gt;Generated on ' + new Date().toLocaleString('en-IN') + '&lt;/div&gt;'
+    + '&lt;/div&gt;&lt;/body&gt;&lt;/html&gt;';
+
+  function row(label, value) {
+    return '&lt;div style="margin-bottom:18px"&gt;'
+      + '&lt;div style="font-size:10px;font-weight:bold;color:#888;text-transform:uppercase;letter-spacing:0.5px"&gt;' + label + '&lt;/div&gt;'
+      + '&lt;div style="font-size:14px;margin-top:2px"&gt;' + (value || '—') + '&lt;/div&gt;'
+      + '&lt;/div&gt;';
+  }
+
+  var htmlBlob = Utilities.newBlob(html, 'text/html', 'quotation.html');
+  var pdfBlob = htmlBlob.getAs('application/pdf');
+  var filename = (d.artist || 'artist').replace(/\s+/g,'_') + '_' + (d.bride ? d.bride.replace(/\s+/g,'_') + '_' : '') + d.role + '_' + d.date.replace(/\//g,'-') + '.pdf';
+  pdfBlob.setName(filename);
+  return pdfBlob;
+}
+
+// PDF read from column AW (index 48) — a Drive link from a Form file-upload question
 var _pdfCache = null;
 function buildPdfCache() {
   if (_pdfCache) return _pdfCache;
@@ -493,7 +620,7 @@ function getPdfUrl(row) {
   var cache = buildPdfCache();
   if (cache[filename]) return cache[filename];
   var keys = Object.keys(cache);
-  for (var i = 0; i < keys.length; i++) {
+  for (var i = 0; i &lt; keys.length; i++) {
     if (keys[i].indexOf(filename) !== -1 || filename.indexOf(keys[i]) !== -1) return cache[keys[i]];
   }
   return '';
@@ -515,12 +642,9 @@ function parseEventDetails(raw) {
   var result = { eventName: '', makeupBy: '', location: '', readyTime: '' };
   if (!raw || raw.trim() === '') return result;
 
-  // Normalise all RT / Ready Time variants → "RT - "
-  // Handles: RT-, RT -, RT- , Ready Time-, Ready Time -, ready time-, "Ready Time -" etc.
   raw = raw.replace(/ready\s*time\s*[-–]\s*/gi, 'RT - ');
   raw = raw.replace(/\bRT\s*[-–]\s*/gi, 'RT - ');
 
-  // Split on comma — each segment is "Key - Value"
   var segments = raw.split(',');
   segments.forEach(function(seg) {
     var idx = seg.indexOf(' - ');
@@ -562,9 +686,33 @@ function ensureSheets(ss) {
   var availSheet = ss.getSheetByName(AVAIL_SHEET);
   if (!availSheet) {
     availSheet = ss.insertSheet(AVAIL_SHEET);
-    availSheet.getRange(1,1,1,5).setValues([['Artist','Date','Status','Note','MarkedBy']]);
+    availSheet.getRange(1,1,1,6).setValues([['Artist','Date','Status','Note','MarkedBy','QuotationUrl']]);
+  } else {
+    // Defensive: add the QuotationUrl column if this sheet was created before this feature existed
+    var header = availSheet.getRange(1,6).getValue();
+    if (header !== 'QuotationUrl') availSheet.getRange(1,6).setValue('QuotationUrl');
   }
-  return { datesSheet: datesSheet, availSheet: availSheet };
+  var emailSheet = ss.getSheetByName(EMAIL_SHEET);
+  if (!emailSheet) {
+    emailSheet = ss.insertSheet(EMAIL_SHEET);
+    emailSheet.getRange(1,1,1,2).setValues([['Artist','Email']]);
+  }
+  return { datesSheet: datesSheet, availSheet: availSheet, emailSheet: emailSheet };
+}
+
+// Looks up an artist's email from the "Artist Emails" tab (Artist | Email columns).
+// Just add rows there to enable emailing — no code changes needed.
+function lookupArtistEmail(ss, artist) {
+  var sheet = ss.getSheetByName(EMAIL_SHEET);
+  if (!sheet) return '';
+  var data = sheet.getDataRange().getValues();
+  var target = String(artist || '').trim().toLowerCase();
+  for (var i = 1; i &lt; data.length; i++) {
+    if (String(data[i][0] || '').trim().toLowerCase() === target) {
+      return String(data[i][1] || '').trim();
+    }
+  }
+  return '';
 }
 
 // ── Rebuild BOOKING_DATES from Responses ───────────
@@ -574,12 +722,11 @@ function rebuildBookingDates() {
   var resp = ss.getSheetByName(RESP_SHEET);
   if (!resp) return;
 
-  var data        = resp.getDataRange().getValues();        // for dates & names
+  var data        = resp.getDataRange().getValues();        // for dates &amp; names
   var displayData = resp.getDataRange().getDisplayValues(); // for free-text detail cols (keeps RT as "12 PM")
-  // col AW (index 48) = PDF file link from the Form's file-upload question
   var rows = [['Date','BrideName','EventNo','EventName','Location','ReadyTime','Month','Year','BookingID','PdfUrl','MakeupBy']];
 
-  for (var i = 1; i < data.length; i++) {
+  for (var i = 1; i &lt; data.length; i++) {
     var row        = data[i];
     var displayRow = displayData[i];
     var brideName = String(row[2] || '').trim();   // col C = Client Name
@@ -620,7 +767,7 @@ function rebuildBookingDates() {
 // Wraps a response as JSONP if a callback param is present (this is what makes
 // reads reliable cross-browser — script-tag loads aren't subject to CORS)
 function jsonOut(e, obj) {
-  var cb = e && e.parameter && e.parameter.callback;
+  var cb = e &amp;&amp; e.parameter &amp;&amp; e.parameter.callback;
   if (cb) {
     return ContentService
       .createTextOutput(cb + '(' + JSON.stringify(obj) + ')')
@@ -632,7 +779,7 @@ function jsonOut(e, obj) {
 }
 
 function doGet(e) {
-  var action = e && e.parameter && e.parameter.action ? e.parameter.action : 'sync';
+  var action = e &amp;&amp; e.parameter &amp;&amp; e.parameter.action ? e.parameter.action : 'sync';
 
   // ── Return PDF list from Drive folder ──────────────
   if (action === 'pdfs') {
@@ -644,7 +791,6 @@ function doGet(e) {
         var f = files.next();
         var name = f.getName();
         if (name.toLowerCase().indexOf('.pdf') !== -1) {
-          // Make file viewable by anyone with link
           try { f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(ex) {}
           pdfs.push({
             name: name.replace(/\.pdf$/i,''),
@@ -659,6 +805,62 @@ function doGet(e) {
       return jsonOut(e, {ok:false, error:String(err)});
     }
   }
+
+  // ── Generate + email a quotation PDF ────────────────
+  if (action === 'quotation' || action === 'refreshQuotation') {
+    try {
+      var ss2 = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
+      ensureSheets(ss2);
+
+      var qData = {
+        artist:    e.parameter.artist || '',
+        role:      e.parameter.role || '',
+        bride:     e.parameter.bride || '',
+        eventNo:   e.parameter.eventNo || '',
+        eventName: e.parameter.eventName || '',
+        date:      e.parameter.date || '',
+        location:  e.parameter.location || '',
+        readyTime: e.parameter.readyTime || ''
+      };
+      qData.formResponse = findFormResponse(qData.role, qData.artist, qData.bride, qData.date);
+
+      // On refresh, remove the old quotation file first so Drive doesn't fill up with stale versions
+      if (action === 'refreshQuotation' &amp;&amp; e.parameter.oldUrl) {
+        var oldIdMatch = String(e.parameter.oldUrl).match(/[-\w]{25,}/);
+        if (oldIdMatch) { try { DriveApp.getFileById(oldIdMatch[0]).setTrashed(true); } catch(ex) {} }
+      }
+
+      var pdfBlob = buildQuotationPdfBlob(qData);
+      var folder = getOrCreateQuotationsFolder();
+      var file = folder.createFile(pdfBlob);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
+
+      var email = lookupArtistEmail(ss2, qData.artist);
+      var emailed = false;
+      // On the initial quotation, always email. On a refresh, only re-email if we
+      // actually found the full form response (otherwise nothing new to send).
+      var shouldEmail = email &amp;&amp; (action === 'quotation' || qData.formResponse);
+      if (shouldEmail) {
+        MailApp.sendEmail({
+          to: email,
+          subject: (action === 'refreshQuotation' ? 'Updated Quotation — ' : 'Assignment Quotation — ') + qData.bride + ' (' + qData.role + ')',
+          body: 'Hi ' + qData.artist + ',\n\n'
+            + 'You have been allotted as ' + qData.role + ' for ' + qData.bride
+            + (qData.eventNo ? ' — ' + qData.eventNo : '') + (qData.eventName ? ' (' + qData.eventName + ')' : '')
+            + ' on ' + qData.date + (qData.location ? ' at ' + qData.location : '') + '.\n\n'
+            + 'Please find the quotation attached.\n\nThank you.',
+          attachments: [pdfBlob]
+        });
+        emailed = true;
+      }
+
+      return jsonOut(e, { ok: true, url: url, emailed: emailed, email: email || '', foundResponse: !!qData.formResponse });
+    } catch(err) {
+      return jsonOut(e, { ok: false, error: String(err) });
+    }
+  }
+
   try {
     var ss = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
     ensureSheets(ss);
@@ -668,7 +870,7 @@ function doGet(e) {
     var datesSheet = ss.getSheetByName(DATES_SHEET);
     var dData = datesSheet.getDataRange().getValues();
     var bookings = [];
-    for (var i = 1; i < dData.length; i++) {
+    for (var i = 1; i &lt; dData.length; i++) {
       var r = dData[i];
       if (!r[0]) continue;
       bookings.push({
@@ -687,11 +889,11 @@ function doGet(e) {
     var availSheet = ss.getSheetByName(AVAIL_SHEET);
     var aData = availSheet.getDataRange().getValues();
     var avail = [];
-    for (var j = 1; j < aData.length; j++) {
+    for (var j = 1; j &lt; aData.length; j++) {
       var a = aData[j];
       if (!a[0] || !a[1]) continue;
       avail.push({ artist: String(a[0]), date: normDate(a[1]),
-                   status: String(a[2]), note: String(a[3]) });
+                   status: String(a[2]), note: String(a[3]), quotationUrl: String(a[5] || '') });
     }
 
     return jsonOut(e, { ok: true, bookings: bookings, avail: avail });
@@ -704,9 +906,6 @@ function doGet(e) {
 // ── doPost — saves availability markings ──────────
 // Normalises a date cell to 'yyyy-MM-dd' regardless of whether Sheets stored
 // it as the original string or auto-converted it to a real Date object.
-// (Without this, string '2026-07-09' !== Date object, so upsert matching
-// would silently fail and every save would append a NEW row instead of
-// updating the existing one — this was the cause of duplicate rows.)
 function normDate(v) {
   if (v instanceof Date) {
     return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -723,14 +922,14 @@ function doPost(e) {
 
     if (payload.action === 'upsert') {
       var matchIdx = -1;
-      for (var i = 1; i < data.length; i++) {
+      for (var i = 1; i &lt; data.length; i++) {
         if (String(data[i][0]) !== payload.artist) continue;
         if (normDate(data[i][1]) !== payload.date) continue;
         if (payload.status === 'ALLOT') {
           // ALLOT rows: match on the SAME event (bride+eventNo prefix) so a
           // second allotment for a different event on the same day doesn't
           // overwrite the first — it gets its own row instead.
-          if (payload.eventKey && String(data[i][3] || '').indexOf(payload.eventKey) === 0) {
+          if (payload.eventKey &amp;&amp; String(data[i][3] || '').indexOf(payload.eventKey) === 0) {
             matchIdx = i; break;
           }
         } else {
@@ -738,13 +937,16 @@ function doPost(e) {
           if (String(data[i][2]) !== 'ALLOT') { matchIdx = i; break; }
         }
       }
-      if (matchIdx >= 0) {
+      if (matchIdx &gt;= 0) {
         availSheet.getRange(matchIdx + 1, 3, 1, 2).setValues([[payload.status, payload.note || '']]);
+        if (payload.quotationUrl) {
+          availSheet.getRange(matchIdx + 1, 6).setValue(payload.quotationUrl);
+        }
       } else {
-        availSheet.appendRow([payload.artist, payload.date, payload.status, payload.note || '', Session.getActiveUser().getEmail()]);
+        availSheet.appendRow([payload.artist, payload.date, payload.status, payload.note || '', Session.getActiveUser().getEmail(), payload.quotationUrl || '']);
       }
     } else if (payload.action === 'delete') {
-      for (var k = 1; k < data.length; k++) {
+      for (var k = 1; k &lt; data.length; k++) {
         if (String(data[k][0]) !== payload.artist) continue;
         if (normDate(data[k][1]) !== payload.date) continue;
         if (payload.eventKey) {
@@ -766,7 +968,8 @@ function doPost(e) {
   } catch(err) {
     return ContentService.createTextOutput('error: '+err.toString());
   }
-}</div>
+}
+</div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
           <div style="background:#EAF3DE;border:1px solid #C0DD97;border-radius:8px;padding:10px;font-size:11px;color:#27500A;line-height:1.6">
             <b>How to deploy:</b> Extensions → Apps Script → paste the full code above → Save → Deploy → New deployment → Web App → Execute as <b>Me</b> → Who has access: <b>Anyone</b> → Deploy → copy the URL → paste in Step 1.
@@ -978,9 +1181,15 @@ function getAllotments(a,d){
   Object.keys(allotments).forEach(function(k){if(k.indexOf(pre)===0)out.push(allotments[k]);});
   return out;
 }
-function setAllotment(a,d,bride,eventNo,note){
-  allotments[allotKey(a,d,bride,eventNo)]={artist:a,date:d,bride:bride||'',eventNo:eventNo||'',note:note};
+function setAllotment(a,d,bride,eventNo,note,quotationUrl){
+  var key=allotKey(a,d,bride,eventNo);
+  var existingUrl=quotationUrl!==undefined?quotationUrl:(allotments[key]?allotments[key].quotationUrl:'');
+  allotments[key]={artist:a,date:d,bride:bride||'',eventNo:eventNo||'',note:note,quotationUrl:existingUrl||''};
   saveAllot();
+}
+function setAllotmentQuotationUrl(a,d,bride,eventNo,url){
+  var key=allotKey(a,d,bride,eventNo);
+  if(allotments[key]){allotments[key].quotationUrl=url;saveAllot();}
 }
 function removeAllotment(a,d,bride,eventNo){
   delete allotments[allotKey(a,d,bride,eventNo)];
@@ -994,7 +1203,7 @@ function rebuildAllotmentsFromServer(rows){
   rows.forEach(function(r){
     if(r.status!=='ALLOT')return;
     var parsed=parseAllotNote(r.note);
-    setAllotment(r.artist,r.date,parsed.bride,parsed.eventNo,r.note);
+    setAllotment(r.artist,r.date,parsed.bride,parsed.eventNo,r.note,r.quotationUrl||'');
   });
 }
 function initials(n){if(!n)return'?';var p=n.trim().split(' ');return(p.length>1?p[0][0]+p[1][0]:n.slice(0,2)).toUpperCase();}
@@ -1481,8 +1690,9 @@ function renderCurrentAllotments(artist,ds,myAllots){
       var roleMatch=parsed.roleText.match(/\b(MA|HA|DR|AST|CC|SIDERS)\b/);
       var role=roleMatch?roleMatch[1]:'';
       var roleColor=ROLE_BADGE_COLORS[role]||'#8E63D2';
+      var quoteLink=al.quotationUrl?'<a href="'+al.quotationUrl+'" target="_blank" rel="noopener" style="display:block;margin-top:4px;font-size:10px;font-weight:700;color:#0F9B8E">✅ View Quotation</a>':'';
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:'+roleColor+'14;border:1.5px solid '+roleColor+'44;border-radius:9px;padding:7px 10px;margin-bottom:6px">'
-        +'<div style="font-size:11.5px;color:#333;font-weight:600;line-height:1.4">'+esc(al.note)+'</div>'
+        +'<div style="flex:1"><div style="font-size:11.5px;color:#333;font-weight:600;line-height:1.4">'+esc(al.note)+'</div>'+quoteLink+'</div>'
         +'<button onclick="removeOneAllotment(\''+artist.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\')" style="flex-shrink:0;width:22px;height:22px;border-radius:6px;background:#fff;border:1.5px solid '+roleColor+'55;color:'+roleColor+';font-size:12px;font-weight:800;cursor:pointer;line-height:1">✕</button>'
         +'</div>';
     }).join('');
@@ -1617,6 +1827,67 @@ function showAllotFormLink(role){
   document.getElementById('allot-link-msg').textContent='Allotted as '+role+(allotBride?' for '+allotBride.bride:'')+'. Please fill the form:';
   showModalSection('link');
   renderQuotationSection(role, artist, bride, activeDate, location);
+
+  // Automatically create + email the official quotation in the background —
+  // no extra tap needed. Once it resolves, "View Quotation" appears in the
+  // sidebar under this event for everyone (persisted to the sheet).
+  var eventNo=allotBride?allotBride.eventNo:'', eventName=allotBride?allotBride.eventName:'', readyTime=allotBride?allotBride.readyTime:'';
+  sendQuotationToServer(role, artist, bride, eventNo, eventName, activeDate, location, readyTime);
+}
+
+function refreshQuotation(role, artist, bride, ds, location, oldUrl){
+  if(!gasUrl)return;
+  var booking=getBookingsForDate(ds).find(function(b){return b.bride===bride;});
+  var eventNo=booking?booking.eventNo:'', eventName=booking?booking.eventName:'', readyTime=booking?booking.readyTime:'';
+  toast('Checking for form response…');
+  var qs='action=refreshQuotation'
+    +'&artist='+encodeURIComponent(artist)
+    +'&role='+encodeURIComponent(role)
+    +'&bride='+encodeURIComponent(bride||'')
+    +'&eventNo='+encodeURIComponent(eventNo||'')
+    +'&eventName='+encodeURIComponent(eventName||'')
+    +'&date='+encodeURIComponent(formatDateForForm(ds))
+    +'&location='+encodeURIComponent(location||'')
+    +'&readyTime='+encodeURIComponent(readyTime||'')
+    +'&oldUrl='+encodeURIComponent(oldUrl||'');
+  reliableGet(gasUrl+'?'+qs).then(function(data){
+    if(!data.ok){toast('Refresh failed: '+(data.error||'unknown'));return;}
+    setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url);
+    var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
+    if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:(bride||'')+' — '+(eventNo||''),quotationUrl:data.url})});
+    renderCal();updateSidebar();refreshOpenPanels(artist);
+    if(data.foundResponse){
+      toast(data.emailed?('📧 Updated quotation emailed to '+artist):'📄 Quotation updated with full form details');
+    } else {
+      toast('Form not submitted yet — quotation still shows basic details only');
+    }
+  }).catch(function(err){
+    toast('Refresh failed — check connection');
+    console.warn('refreshQuotation failed',err);
+  });
+}
+
+function sendQuotationToServer(role, artist, bride, eventNo, eventName, ds, location, readyTime){
+  if(!gasUrl)return;
+  var qs='action=quotation'
+    +'&artist='+encodeURIComponent(artist)
+    +'&role='+encodeURIComponent(role)
+    +'&bride='+encodeURIComponent(bride||'')
+    +'&eventNo='+encodeURIComponent(eventNo||'')
+    +'&eventName='+encodeURIComponent(eventName||'')
+    +'&date='+encodeURIComponent(formatDateForForm(ds))
+    +'&location='+encodeURIComponent(location||'')
+    +'&readyTime='+encodeURIComponent(readyTime||'');
+  reliableGet(gasUrl+'?'+qs).then(function(data){
+    if(!data.ok){console.warn('Quotation generation failed:',data.error);return;}
+    setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url);
+    var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
+    if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:(bride||'')+' — '+(eventNo||''),quotationUrl:data.url})});
+    renderCal();updateSidebar();refreshOpenPanels(artist);
+    toast(data.emailed?('📧 Quotation emailed to '+artist+' ('+data.email+')'):('📄 Quotation created — no email on file for '+artist));
+  }).catch(function(err){
+    console.warn('Quotation server generation failed',err);
+  });
 }
 
 function renderQuotationSection(role, artist, bride, ds, location){
@@ -1871,7 +2142,7 @@ function updateSidebar(){
     var d=new Date(ds+'T00:00:00');
     if(d.getMonth()!==vm||d.getFullYear()!==vy)return;
     if(!dateArtistMap[ds])dateArtistMap[ds]=[];
-    dateArtistMap[ds].push({artist:rec.artist,status:'ALLOT',note:rec.note,bride:rec.bride,eventNo:rec.eventNo});
+    dateArtistMap[ds].push({artist:rec.artist,status:'ALLOT',note:rec.note,bride:rec.bride,eventNo:rec.eventNo,quotationUrl:rec.quotationUrl});
   });
   // Non-ALLOT statuses (FREE/BUSY/TENTATIVE/LEAVE) — still single value per artist/day
   Object.keys(avail).forEach(function(k){
@@ -1929,7 +2200,7 @@ function updateSidebar(){
             };
             groupOrder.push(gKey);
           }
-          eventGroups[gKey].people.push({artist:a.artist, role:role, extra:extra});
+          eventGroups[gKey].people.push({artist:a.artist, role:role, extra:extra, quotationUrl:a.quotationUrl});
         } else {
           unassignedAllots.push({artist:a.artist, role:role, extra:extra});
         }
@@ -1944,7 +2215,10 @@ function updateSidebar(){
           var roleColor=ROLE_BADGE_COLORS[p.role]||'#666';
           var roleTag=p.role?'<span style="display:inline-block;background:'+roleColor+';color:#fff;font-size:9.5px;font-weight:800;border-radius:5px;padding:1px 6px;margin-left:5px;letter-spacing:0.4px">'+p.role+'</span>':'';
           var extraTag=p.extra?'<span style="font-size:9.5px;color:#0F9B8E;font-weight:600;margin-left:4px">('+esc(p.extra)+')</span>':'';
-          var quoteBtn=p.role?'<button onclick="downloadQuotationPdf(\''+p.role+'\',\''+p.artist.replace(/'/g,"\\'")+'\',\''+g.bride.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(g.location||'').replace(/'/g,"\\'")+'\')" title="Download quotation PDF" style="margin-left:5px;background:none;border:none;cursor:pointer;font-size:11px;color:#0F9B8E;padding:0">📄</button>':'';
+          var quoteBtn=p.quotationUrl
+            ? '<a href="'+p.quotationUrl+'" target="_blank" rel="noopener" style="margin-left:6px;display:inline-flex;align-items:center;gap:3px;font-size:9.5px;font-weight:700;color:#fff;background:#0F9B8E;text-decoration:none;border-radius:5px;padding:2px 7px">✅ View Quotation</a>'
+              +'<button onclick="refreshQuotation(\''+p.role+'\',\''+p.artist.replace(/'/g,"\\'")+'\',\''+g.bride.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(g.location||'').replace(/'/g,"\\'")+'\',\''+p.quotationUrl+'\')" title="Refresh with full form details once the artist has submitted the form" style="margin-left:4px;background:none;border:none;cursor:pointer;font-size:11px;color:#0F9B8E;padding:0">🔄</button>'
+            : (p.role?'<button onclick="downloadQuotationPdf(\''+p.role+'\',\''+p.artist.replace(/'/g,"\\'")+'\',\''+g.bride.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(g.location||'').replace(/'/g,"\\'")+'\')" title="Quick local PDF (not yet saved to server)" style="margin-left:5px;background:none;border:none;cursor:pointer;font-size:11px;color:#0F9B8E;padding:0">📄</button>':'');
           return '<span style="display:inline-flex;align-items:center;margin:2px 10px 2px 0"><span style="font-size:12px;font-weight:700;color:#222">'+esc(p.artist)+'</span>'+roleTag+extraTag+quoteBtn+'</span>';
         }).join('');
 

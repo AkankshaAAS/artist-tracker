@@ -1176,18 +1176,20 @@ function doPost(e) {
       <button onclick="backToBrides()" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
     </div>
 
-    <!-- ALLOT FLOW: Siders — number of siders + names -->
+    <!-- ALLOT FLOW: Siders — an extra client (e.g. bride's mom, sister) also
+         getting ready alongside the bride, plus the artist assigned to them -->
     <div id="allot-siders-section" style="display:none;margin-top:12px">
-      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Siders details</div>
-      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">No. of siders</div>
+      <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Sider details — extra person(s) also getting ready</div>
+      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">No. of siders (extra people)</div>
       <input id="siders-count" type="number" min="1" value="1" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:10px;font-family:inherit">
-      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">Name(s) — comma separated</div>
-      <input id="siders-names" type="text" placeholder="e.g. Ramesh, Suresh" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:12px;font-family:inherit">
-      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">Confirm as</div>
+      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">Who are they? (comma separated)</div>
+      <input id="siders-names" type="text" placeholder="e.g. Bride's Mom, Bride's Sister" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:12px;font-family:inherit">
+      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">Artist doing their look — confirm as</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button onclick="confirmSidersRole('MA')" style="height:48px;border-radius:12px;background:#A3365A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">MA</button>
         <button onclick="confirmSidersRole('HA')" style="height:48px;border-radius:12px;background:#6B3A8A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">HA</button>
       </div>
+      <div style="font-size:10px;color:#aaa;margin-top:6px;line-height:1.5">This uses whichever artist is currently selected up top for the sider's look too. To use a different artist for the sider, switch the artist dropdown first, then allot again.</div>
       <button onclick="showModalSection('role')" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
     </div>
 
@@ -2341,6 +2343,7 @@ function confirmSidersRole(role){
   if(!artist||!activeDate)return;
   var count=parseInt(document.getElementById('siders-count').value,10)||1;
   var names=document.getElementById('siders-names').value.trim();
+  if(!names){toast("Please type who the extra person is (e.g. Bride's Mom) before confirming");return;}
   var extra='Siders ('+count+')'+(names?': '+names:'');
   var roleText=role+' — '+extra;
   var bride=allotBride?allotBride.bride:'', eventNo=allotBride?allotBride.eventNo:'';

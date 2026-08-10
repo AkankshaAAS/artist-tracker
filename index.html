@@ -329,6 +329,11 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
       <div class="sidebar">
         <div class="scard">
           <div class="scard-title"><i class="ti ti-calendar-event" style="font-size:16px;color:#A3365A" aria-hidden="true"></i><span id="feed-month-title">This Month</span></div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+            <input id="feed-filter-client" type="text" placeholder="🔍 Filter by client name..." oninput="renderUnifiedFeed()" style="height:34px;border-radius:8px;border:1.5px solid #ECECEC;padding:0 10px;font-size:12px;font-family:inherit">
+            <div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Makeup By</div>
+            <div id="feed-filter-makeupby-chips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+          </div>
           <div id="unified-feed"><div class="no-bookings">No bookings this month</div></div>
         </div>
       </div>
@@ -2496,13 +2501,53 @@ function getAllotmentsForDate(ds){
   return Object.keys(allotments).filter(function(k){return allotments[k].date===ds;}).map(function(k){return allotments[k];});
 }
 
+// Tracks which Makeup By checkboxes are checked (case-insensitive key),
+// persists across re-renders so switching months keeps your filter picks.
+var feedMbChecked={};
+function toggleFeedMbFilter(input){
+  var key=input.getAttribute('data-mb').toLowerCase();
+  feedMbChecked[key]=input.checked;
+  renderUnifiedFeed();
+}
+
 function renderUnifiedFeed(){
   var titleEl=document.getElementById('feed-month-title');
   if(titleEl)titleEl.textContent=MONTHS[vm]+' '+vy;
   var feed=document.getElementById('unified-feed');
   if(!feed)return;
 
-  var mb=getBookingsForMonth(vm,vy);
+  var allMb=getBookingsForMonth(vm,vy);
+
+  // Build the Makeup By checkboxes from this month's actual data, preserving
+  // whichever ones are already checked (feedMbChecked persists across renders).
+  var chipsBox=document.getElementById('feed-filter-makeupby-chips');
+  var mbNames=[];
+  if(chipsBox){
+    var seenMb={};
+    allMb.forEach(function(b){
+      var n=(b.makeupBy||'').trim();
+      if(n && !seenMb[n.toLowerCase()]){seenMb[n.toLowerCase()]=true;mbNames.push(n);}
+    });
+    mbNames.sort();
+    chipsBox.innerHTML=mbNames.map(function(n){
+      var key=n.toLowerCase();
+      var checked=feedMbChecked[key]?'checked':'';
+      return '<label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#555;background:#F8F7F8;border:1.5px solid #ECECEC;border-radius:20px;padding:4px 10px;cursor:pointer">'
+        +'<input type="checkbox" data-mb="'+esc(n)+'" onchange="toggleFeedMbFilter(this)" '+checked+' style="margin:0;cursor:pointer">'+esc(n)+'</label>';
+    }).join('');
+    if(!mbNames.length)chipsBox.innerHTML='<span style="font-size:11px;color:#bbb">No makeup-by data this month</span>';
+  }
+
+  var clientFilter=(document.getElementById('feed-filter-client')||{}).value||'';
+  clientFilter=clientFilter.trim().toLowerCase();
+  var checkedMbKeys=Object.keys(feedMbChecked).filter(function(k){return feedMbChecked[k];});
+
+  var mb=allMb.filter(function(b){
+    if(clientFilter && (b.bride||'').toLowerCase().indexOf(clientFilter)===-1)return false;
+    if(checkedMbKeys.length && checkedMbKeys.indexOf((b.makeupBy||'').toLowerCase())===-1)return false;
+    return true;
+  });
+
   var byDate={};
   mb.forEach(function(b){
     var ds=bookingDs(b);
@@ -2510,16 +2555,23 @@ function renderUnifiedFeed(){
     if(!byDate[ds])byDate[ds]=[];
     byDate[ds].push(b);
   });
-  // Also surface any allotted dates that somehow have no matching booking record
-  Object.keys(allotments).forEach(function(k){
-    var rec=allotments[k];
-    var d=new Date(rec.date+'T00:00:00');
-    if(d.getMonth()!==vm||d.getFullYear()!==vy)return;
-    if(!byDate[rec.date])byDate[rec.date]=[];
-  });
+  // Also surface any allotted dates that somehow have no matching booking
+  // record — only when no filters are active, since orphan allotment rows
+  // don't carry client-name/makeup-by info to filter against.
+  if(!clientFilter && !checkedMbKeys.length){
+    Object.keys(allotments).forEach(function(k){
+      var rec=allotments[k];
+      var d=new Date(rec.date+'T00:00:00');
+      if(d.getMonth()!==vm||d.getFullYear()!==vy)return;
+      if(!byDate[rec.date])byDate[rec.date]=[];
+    });
+  }
 
   var sortedDates=Object.keys(byDate).sort();
-  if(!sortedDates.length){feed.innerHTML='<div class="no-bookings">No bookings this month</div>';return;}
+  if(!sortedDates.length){
+    feed.innerHTML='<div class="no-bookings">'+((clientFilter||checkedMbKeys.length)?'No matching bookings this month':'No bookings this month')+'</div>';
+    return;
+  }
 
   var html='';
   sortedDates.forEach(function(ds){
@@ -2552,11 +2604,20 @@ function renderBookingBlock(b, ds){
     return a.date===ds && a.bride===b.bride && a.eventNo===b.eventNo;
   });
 
-  var roleMap={};
-  var otherRoles=[];
+  // Siders-tagged allotments (extra client, e.g. bride's mom) get shown in
+  // their own box — they must NOT merge into the main bride's MA/HA line,
+  // since that hides who's actually doing the bride's own look.
+  var sidersAllots=[], normalAllots=[];
   matchingAllots.forEach(function(a){
     var parsed=parseAllotNote(a.note);
-    var roleMatch=parsed.roleText.match(/\b(MA|HA|DR|AST|CC|SIDERS)\b/);
+    if(/Siders\s*\(/i.test(parsed.roleText)) sidersAllots.push(a); else normalAllots.push(a);
+  });
+
+  var roleMap={};
+  var otherRoles=[];
+  normalAllots.forEach(function(a){
+    var parsed=parseAllotNote(a.note);
+    var roleMatch=parsed.roleText.match(/\b(MA|HA|DR|AST|CC)\b/);
     var role=roleMatch?roleMatch[1]:'';
     var extra=role?parsed.roleText.slice(parsed.roleText.indexOf(role)+role.length).replace(/^[\s—-]+/,'').trim():parsed.roleText;
     var entry={artist:a.artist, quotationUrl:a.quotationUrl, extra:extra};
@@ -2580,12 +2641,50 @@ function renderBookingBlock(b, ds){
     return '<div style="font-size:11.5px;color:#444;margin-top:2px"><b>'+esc(o.role)+':</b> '+esc(e.artist)+quoteBit+'</div>';
   }).join('');
 
+  // ── Sider info box ──────────────────────────────
+  var sidersBoxHtml='';
+  if(sidersAllots.length){
+    var sInfo=null, sMA=null, sHA=null;
+    sidersAllots.forEach(function(a){
+      var parsed=parseAllotNote(a.note);
+      var roleM=parsed.roleText.match(/\b(MA|HA)\b/);
+      var roleLetter=roleM?roleM[1]:'';
+      var m=String(a.note||'').match(/Siders\s*\((\d+)\)\s*:?\s*(.*)$/i);
+      if(m && !sInfo)sInfo={count:m[1], names:(m[2]||'').trim()};
+      var entry={artist:a.artist, quotationUrl:a.quotationUrl, note:a.note};
+      if(roleLetter==='MA')sMA=entry;
+      else if(roleLetter==='HA')sHA=entry;
+    });
+    function sActionRow(entry,roleLbl){
+      if(!entry)return '<div style="font-size:12px;color:#bbb;margin-bottom:3px">'+roleLbl+': —</div>';
+      var artistEsc=entry.artist.replace(/'/g,"\\'");
+      var noteEsc=(entry.note||'').replace(/'/g,"\\'");
+      var actions;
+      if(entry.quotationUrl){
+        actions='<a href="'+entry.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;font-weight:700;color:#0F9B8E">✅ View</a>'
+          +' · <a href="javascript:void(0)" onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\',\''+noteEsc+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#888">✏️ Edit</a>'
+          +' · <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artistEsc+'\',\''+roleLbl+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#A3365A">📧 Send</a>';
+      } else {
+        actions='<button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\',\''+noteEsc+'\',\'\')" style="font-size:10px;font-weight:700;color:#fff;background:#0F9B8E;border:none;border-radius:5px;padding:2px 8px;cursor:pointer">📄 Fill Quotation</button>';
+      }
+      return '<div style="font-size:12.5px;margin-bottom:4px"><b>'+roleLbl+':</b> '+esc(entry.artist)+'<br><span style="margin-left:1px">'+actions+'</span></div>';
+    }
+    sidersBoxHtml='<div style="margin-top:8px;padding:9px 11px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px">'
+      +'<div style="font-size:10px;font-weight:800;color:#0F9B8E;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">🧵 Sider</div>'
+      +(sInfo && sInfo.names ? '<div style="font-size:13px;font-weight:800;color:#222;margin-bottom:2px">'+esc(sInfo.names)+'</div>' : '')
+      +'<div style="font-size:11px;color:#666;margin-bottom:6px">No. of Sider — '+(sInfo?esc(sInfo.count):'—')+'</div>'
+      +sActionRow(sMA,'MA')
+      +sActionRow(sHA,'HA')
+    +'</div>';
+  }
+
   var pdfLine=b.pdfUrl?'<a href="'+b.pdfUrl+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:3px;margin-top:6px;font-size:10.5px;font-weight:700;color:#C0392B;text-decoration:none;background:#FFECEC;border:1.5px solid #F4C0C0;border-radius:6px;padding:2px 9px">📄 View PDF</a>':'';
 
   return '<div style="background:'+bgColor+';border-left:4px solid '+borderColor+';border-radius:10px;padding:10px 12px;margin-bottom:10px">'
     +'<div style="font-size:13.5px;font-weight:800;color:#222;margin-bottom:8px">'+esc(b.bride)+(b.makeupBy?' <span style="display:inline-block;font-size:13px;font-weight:800;color:#fff;background:'+mbColor+';border-radius:6px;padding:2px 10px;margin-left:4px;letter-spacing:.2px">'+esc(b.makeupBy)+'</span>':'')+'</div>'
     +'<div style="font-size:12px;color:#333;line-height:2.2">'+roleLine('MA')+'<br>'+roleLine('HA')+'</div>'
     +otherRolesHtml
+    +sidersBoxHtml
     +'<div style="font-size:11.5px;color:#666;margin-top:6px">'+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</div>'
     +(b.location?'<div style="font-size:11px;color:#666">📍 '+esc(b.location)+'</div>':'')
     +(b.readyTime?'<div style="font-size:11px;color:#A3365A;font-weight:700">⏰ RT: '+esc(b.readyTime)+'</div>':'')

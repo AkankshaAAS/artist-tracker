@@ -412,6 +412,13 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
         <div id="backfill-status" style="margin-top:10px"></div>
       </div>
 
+      <div class="set-card" style="border-color:#F1D9E3">
+        <div class="set-card-title"><i class="ti ti-mail-forward" style="font-size:18px;color:#A3365A" aria-hidden="true"></i>Email every generated quotation</div>
+        <div class="set-card-sub">Sends every quotation PDF that's already been generated to its artist by email — skips any that don't have an email on file, and skips any already sent (checked against each row's "sent" mark), so it's always safe to run again.</div>
+        <button onclick="runEmailAllQuotations()" id="email-all-btn" style="height:44px;padding:0 20px;border-radius:10px;background:#A3365A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer">📧 Send all quotations now</button>
+        <div id="email-all-status" style="margin-top:10px"></div>
+      </div>
+
       <div class="set-card">
         <div class="set-card-title"><i class="ti ti-database" style="font-size:18px;color:#A3365A" aria-hidden="true"></i>What gets created in your Google Sheet</div>
         <div class="set-card-sub">Two new tabs are automatically added to your existing Sales Bridal Response Sheet. Your Responses tab is never changed.</div>
@@ -458,16 +465,82 @@ var MA_RESPONSE_TAB = 'MA Responses';
 var HA_RESPONSE_SHEET_ID = '1OxyPIbnwDqkRnidc-75wM5PHX8wBhKzbPZCxOhSryMo';
 var HA_RESPONSE_TAB = 'HA Responses';
 
-// Column order (0-based) as submitted by Google Forms — matches:
-// Timestamp, Event Date, Booking ID, Artist Name, Client Name, Location,
-// Makeup/Hairstyle for, No. of Sider/Bride/Groom, No. of Events,
-// Charges Approved per Look, Total payable Charges, Lashes, Lenses,
-// Travel, Additional Information, Payment Type
-var RESPONSE_COLS = {
-  timestamp:0, eventDate:1, bookingId:2, artistName:3, clientName:4, location:5,
-  serviceFor:6, siderCount:7, eventCount:8, chargesPerLook:9, totalPayable:10,
-  lashes:11, lenses:12, travel:13, additionalInfo:14, paymentType:15
+// ── Header-based column lookup ──────────────────────
+// IMPORTANT CHANGE: columns used to be hardcoded by position (0,1,2...),
+// which silently breaks the moment a Timestamp column is added/removed or a
+// column gets reordered — this was the #1 cause of quotations showing
+// "Awaiting form submission" even when the artist HAD filled the form.
+// Now every column is looked up by its header text instead, so the sheet
+// can be re-arranged freely without breaking anything.
+var RESPONSE_COL_ALIASES = {
+  eventDate:        ['event date'],
+  bookingId:        ['booking id'],
+  artistName:       ['makeup artist name', 'hair artist name', 'artist name'],
+  clientName:       ['client name'],
+  location:         ['location'],
+  serviceFor:       ['makeup for', 'hairstyle for'],
+  eventNoLabel:     ['event no', 'event no.', 'event number'], // optional — not in the sheet yet, see note below
+  siderCount:       ['no. of sider/bride/groom', 'no of sider/bride/groom'],
+  eventCount:       ['no. of events', 'no of events'],
+  chargesPerLook:   ['charges approved per look', 'charges approved'],
+  totalPayable:     ['total payable charges'],
+  lashes:           ['lashes'],
+  lenses:           ['lenses'],
+  sareeDraping:     ['saree draping'],
+  dupattaDraping:   ['dupatta draping'],
+  accessories:      ['accessories (small)', 'accessories'],
+  hairExtensions:   ['hair extensions'],
+  extensionsReturn: ['extensions to be returned back from client'],
+  extensionDeposit: ['if answer is yes, extension deposit to be taken', 'extension deposit to be taken'],
+  travel:           ['travel'],
+  additionalInfo:   ['additional information'],
+  paymentType:      ['payment type']
 };
+
+function buildResponseColMap(sheet) {
+  var lastCol = sheet.getLastColumn();
+  var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var norm = header.map(function(h) { return String(h || '').trim().toLowerCase(); });
+  var map = {};
+  Object.keys(RESPONSE_COL_ALIASES).forEach(function(key) {
+    var aliases = RESPONSE_COL_ALIASES[key];
+    var idx = -1;
+    for (var a = 0; a &lt; aliases.length; a++) {
+      idx = norm.indexOf(aliases[a]);
+      if (idx !== -1) break;
+    }
+    map[key] = idx; // -1 means "not found" — every reader must handle that gracefully
+  });
+  return map;
+}
+
+// Safe cell reader — returns '' if the column wasn't found or the cell is empty
+function rv(row, map, key) {
+  var idx = map[key];
+  if (idx === undefined || idx &lt; 0 || idx &gt;= row.length) return '';
+  var val = row[idx];
+  return (val === undefined || val === null) ? '' : String(val).trim();
+}
+
+// Loose name match for client/bride names — real sheets have inconsistent
+// suffixes like "2", "upgraded", "siders" that won't match character-for-
+// character, so this checks case/punctuation-insensitive containment in
+// either direction instead of requiring an exact match.
+function namesLooselyMatch(a, b) {
+  var na = String(a || '').trim().toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  var nb = String(b || '').trim().toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  return na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1;
+}
+
+// Parses an ALLOT note of the form "Bride — EventNo — ROLE[extra]" back into
+// parts — server-side twin of the client's parseAllotNote().
+function parseAllotNoteServer(note) {
+  var parts = String(note || '').split(' — ');
+  if (parts.length &gt;= 2) return { bride: parts[0].trim(), eventNo: parts[1].trim() };
+  return { bride: '', eventNo: '' };
+}
 
 function findFormResponse(role, artistName, clientName, eventDateStr) {
   var sheetId = role === 'HA' ? HA_RESPONSE_SHEET_ID : MA_RESPONSE_SHEET_ID;
@@ -478,29 +551,35 @@ function findFormResponse(role, artistName, clientName, eventDateStr) {
     var sheet = ss.getSheetByName(tabName);
     if (!sheet) return null;
     var data = sheet.getDataRange().getValues();
+    if (data.length &lt; 2) return null;
+    var map = buildResponseColMap(sheet);
     var artistLc = String(artistName || '').trim().toLowerCase();
-    var clientLc = String(clientName || '').trim().toLowerCase();
     var fallback = null;
     // Search newest-first so the latest submission wins if there are re-submissions
     for (var i = data.length - 1; i &gt;= 1; i--) {
       var r = data[i];
-      var rowArtist = String(r[RESPONSE_COLS.artistName] || '').trim().toLowerCase();
-      var rowClient = String(r[RESPONSE_COLS.clientName] || '').trim().toLowerCase();
-      if (rowArtist !== artistLc || rowClient !== clientLc) continue;
-      var rowDate = String(r[RESPONSE_COLS.eventDate] || '').trim();
+      var rowArtist = rv(r, map, 'artistName').toLowerCase();
+      if (rowArtist !== artistLc) continue;
+      var rowClient = rv(r, map, 'clientName');
+      if (!namesLooselyMatch(rowClient, clientName)) continue;
       var obj = {
-        serviceFor:     String(r[RESPONSE_COLS.serviceFor] || ''),
-        siderCount:     String(r[RESPONSE_COLS.siderCount] || ''),
-        eventCount:     String(r[RESPONSE_COLS.eventCount] || ''),
-        chargesPerLook: String(r[RESPONSE_COLS.chargesPerLook] || ''),
-        totalPayable:   String(r[RESPONSE_COLS.totalPayable] || ''),
-        lashes:         String(r[RESPONSE_COLS.lashes] || ''),
-        lenses:         String(r[RESPONSE_COLS.lenses] || ''),
-        travel:         String(r[RESPONSE_COLS.travel] || ''),
-        additionalInfo: String(r[RESPONSE_COLS.additionalInfo] || ''),
-        paymentType:    String(r[RESPONSE_COLS.paymentType] || '')
+        serviceFor:       rv(r, map, 'serviceFor'),
+        siderCount:       rv(r, map, 'siderCount'),
+        eventCount:       rv(r, map, 'eventCount'),
+        chargesPerLook:   rv(r, map, 'chargesPerLook'),
+        totalPayable:     rv(r, map, 'totalPayable'),
+        lashes:           rv(r, map, 'lashes'),
+        lenses:           rv(r, map, 'lenses'),
+        sareeDraping:     rv(r, map, 'sareeDraping'),
+        dupattaDraping:   rv(r, map, 'dupattaDraping'),
+        accessories:      rv(r, map, 'accessories'),
+        hairExtensions:   rv(r, map, 'hairExtensions'),
+        travel:           rv(r, map, 'travel'),
+        additionalInfo:   rv(r, map, 'additionalInfo'),
+        paymentType:      rv(r, map, 'paymentType')
       };
-      if (rowDate === eventDateStr) return obj; // exact date match — best case
+      var rowDate = rv(r, map, 'eventDate');
+      if (rowDate &amp;&amp; eventDateStr &amp;&amp; rowDate === eventDateStr) return obj; // exact date match — best case
       if (!fallback) fallback = obj;            // else fall back to most recent artist+client match
     }
     return fallback;
@@ -523,21 +602,52 @@ function getOrCreateQuotationsFolder() {
 function buildQuotationPdfBlob(d) {
   var roleLabels = {MA:'Makeup Artist', HA:'Hair Artist', DR:'Drappist', AST:'Assistant', CC:'Content Creator'};
   var roleLabel = roleLabels[d.role] || d.role;
-  var fr = d.formResponse; // extra fields from the submitted form, if found
+  var fr  = d.formResponse || {}; // real data read from the artist's submitted MA/HA form
+  var man = d.manual || {};       // anything staff typed manually into the Fill Quotation modal
+
+  // Manual entry wins field-by-field over the form response, so a manual
+  // correction always sticks — but if a field is left blank manually, the
+  // real form submission (if any) is used automatically.
+  function pick(key) {
+    var m = man[key];
+    if (m !== undefined &amp;&amp; m !== null &amp;&amp; String(m).trim() !== '') return String(m).trim();
+    return fr[key] || '';
+  }
+  var merged = {
+    serviceFor:     pick('serviceFor'),
+    siderCount:     pick('siderCount'),
+    eventCount:     pick('eventCount'),
+    chargesPerLook: pick('chargesPerLook'),
+    totalPayable:   pick('totalPayable'),
+    lashes:         pick('lashes'),
+    lenses:         pick('lenses'),
+    sareeDraping:   pick('sareeDraping'),
+    dupattaDraping: pick('dupattaDraping'),
+    accessories:    pick('accessories'),
+    hairExtensions: pick('hairExtensions'),
+    travel:         pick('travel'),
+    paymentType:    pick('paymentType'),
+    additionalInfo: pick('additionalInfo')
+  };
+  var hasAny = Object.keys(merged).some(function(k){ return !!merged[k]; });
 
   var extraHtml = '';
-  if (fr) {
+  if (hasAny) {
     var forLabel = d.role === 'HA' ? 'Hairstyle For' : 'Makeup For';
-    extraHtml += row(forLabel, fr.serviceFor);
-    extraHtml += row('No. of Sider/Bride/Groom', fr.siderCount);
-    extraHtml += row('No. of Events', fr.eventCount);
-    extraHtml += row('Charges Approved per Look', fr.chargesPerLook);
-    extraHtml += row('Total Payable Charges', fr.totalPayable);
-    if (fr.lashes) extraHtml += row('Lashes', fr.lashes);
-    if (fr.lenses) extraHtml += row('Lenses', fr.lenses);
-    if (fr.travel) extraHtml += row('Travel', fr.travel);
-    if (fr.paymentType) extraHtml += row('Payment Type', fr.paymentType);
-    if (fr.additionalInfo) extraHtml += row('Additional Information', fr.additionalInfo);
+    if (merged.serviceFor)     extraHtml += row(forLabel, merged.serviceFor);
+    if (merged.siderCount)     extraHtml += row('No. of Sider/Bride/Groom', merged.siderCount);
+    if (merged.eventCount)     extraHtml += row('No. of Events', merged.eventCount);
+    if (merged.chargesPerLook) extraHtml += row('Charges Approved', merged.chargesPerLook);
+    if (merged.totalPayable)   extraHtml += row('Total Payable Charges', merged.totalPayable);
+    if (merged.sareeDraping)   extraHtml += row('Saree Draping', merged.sareeDraping);
+    if (merged.dupattaDraping) extraHtml += row('Dupatta Draping', merged.dupattaDraping);
+    if (merged.accessories)    extraHtml += row('Accessories', merged.accessories);
+    if (merged.hairExtensions) extraHtml += row('Hair Extensions', merged.hairExtensions);
+    if (merged.lashes)         extraHtml += row('Lashes', merged.lashes);
+    if (merged.lenses)         extraHtml += row('Lenses', merged.lenses);
+    if (merged.travel)         extraHtml += row('Travel', merged.travel);
+    if (merged.paymentType)    extraHtml += row('Payment Type', merged.paymentType);
+    if (merged.additionalInfo) extraHtml += row('Additional Information', merged.additionalInfo);
   } else {
     extraHtml += '&lt;div style="margin-top:6px;padding:10px 14px;background:#FFF8EC;border:1px solid #FDE8C3;border-radius:8px;font-size:11px;color:#7A4E00"&gt;Awaiting form submission — charges, lashes/lenses, travel, and other details will appear here once the artist fills the form.&lt;/div&gt;';
   }
@@ -654,13 +764,13 @@ function parseEventDetails(raw) {
     var key = seg.substring(0, idx).trim().toLowerCase();
     var val = seg.substring(idx + 3).trim();
     if (!val) return;
-    if (!result.eventName && (key.indexOf('event name') !== -1 || key === 'event')) {
+    if (!result.eventName &amp;&amp; (key.indexOf('event name') !== -1 || key === 'event')) {
       result.eventName = val;
-    } else if (!result.makeupBy && (key.indexOf('makeup') !== -1 || key.indexOf('mb') !== -1)) {
+    } else if (!result.makeupBy &amp;&amp; (key.indexOf('makeup') !== -1 || key.indexOf('mb') !== -1)) {
       result.makeupBy = val;
-    } else if (!result.location && (key.indexOf('location') !== -1 || key === 'loc')) {
+    } else if (!result.location &amp;&amp; (key.indexOf('location') !== -1 || key === 'loc')) {
       result.location = val;
-    } else if (!result.readyTime && (key === 'rt' || key.indexOf('ready') !== -1)) {
+    } else if (!result.readyTime &amp;&amp; (key === 'rt' || key.indexOf('ready') !== -1)) {
       result.readyTime = val;
     }
   });
@@ -671,7 +781,7 @@ function parseEventDetails(raw) {
 // Sheets sometimes stores event dates as real Date objects, and sometimes as
 // free text typed by hand — e.g. "18/12/26" (DD/MM/YY). JavaScript's native
 // Date parsing assumes the AMERICAN format (MM/DD), which silently breaks in
-// two ways: dates with day > 12 fail outright and vanish from the calendar
+// two ways: dates with day &gt; 12 fail outright and vanish from the calendar
 // (e.g. "18/12/26" → invalid, since there's no 18th month), and dates with
 // day ≤ 12 parse "successfully" but land on the WRONG day with no error at
 // all (e.g. "9/7/26" silently becomes 7 Sep instead of 9 Jul). This parser
@@ -685,8 +795,8 @@ function parseFlexibleDate(v) {
     var day = parseInt(m[1], 10);
     var month = parseInt(m[2], 10);
     var year = parseInt(m[3], 10);
-    if (year < 100) year += 2000;
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+    if (year &lt; 100) year += 2000;
+    if (month &gt;= 1 &amp;&amp; month &lt;= 12 &amp;&amp; day &gt;= 1 &amp;&amp; day &lt;= 31) {
       return new Date(year, month - 1, day);
     }
   }
@@ -715,11 +825,24 @@ function ensureSheets(ss) {
   var availSheet = ss.getSheetByName(AVAIL_SHEET);
   if (!availSheet) {
     availSheet = ss.insertSheet(AVAIL_SHEET);
-    availSheet.getRange(1,1,1,6).setValues([['Artist','Date','Status','Note','MarkedBy','QuotationUrl']]);
+    availSheet.getRange(1,1,1,8).setValues([['Artist','Date','Status','Note','MarkedBy','QuotationUrl','EmailedAt','QuoteDataSig']]);
   } else {
-    // Defensive: add the QuotationUrl column if this sheet was created before this feature existed
-    var header = availSheet.getRange(1,6).getValue();
-    if (header !== 'QuotationUrl') availSheet.getRange(1,6).setValue('QuotationUrl');
+    // Defensive: add the QuotationUrl / EmailedAt / QuoteDataSig columns if
+    // this sheet was created before those features existed
+    var header6 = availSheet.getRange(1,6).getValue();
+    if (header6 !== 'QuotationUrl') availSheet.getRange(1,6).setValue('QuotationUrl');
+    var header7 = availSheet.getRange(1,7).getValue();
+    if (header7 !== 'EmailedAt') availSheet.getRange(1,7).setValue('EmailedAt');
+    // QuoteDataSig records a fingerprint of the form-response fields that
+    // were baked into the current quotation PDF. This is what lets the
+    // backfill tell "quotation already reflects the latest form answers"
+    // apart from "quotation was generated before the artist filled the
+    // form and has been stuck showing 'Awaiting form submission' ever
+    // since" — both cases previously looked identical (just "has a URL"),
+    // which was the #1 cause of quotations never picking up late form
+    // submissions.
+    var header8 = availSheet.getRange(1,8).getValue();
+    if (header8 !== 'QuoteDataSig') availSheet.getRange(1,8).setValue('QuoteDataSig');
   }
   var emailSheet = ss.getSheetByName(EMAIL_SHEET);
   if (!emailSheet) {
@@ -742,6 +865,22 @@ function lookupArtistEmail(ss, artist) {
     }
   }
   return '';
+}
+
+// Marks a quotation as emailed (sets the EmailedAt timestamp on its
+// Artist Availability row) so a bulk "send all" run never double-sends.
+function markQuotationEmailed(ss, artist, url) {
+  try {
+    var availSheet = ss.getSheetByName(AVAIL_SHEET);
+    var data = availSheet.getDataRange().getValues();
+    for (var i = 1; i &lt; data.length; i++) {
+      if (String(data[i][0]).trim().toLowerCase() === String(artist).trim().toLowerCase()
+          &amp;&amp; String(data[i][5]) === String(url)) {
+        availSheet.getRange(i + 1, 7).setValue(new Date());
+        break;
+      }
+    }
+  } catch(e) { Logger.log('markQuotationEmailed: ' + e); }
 }
 
 // ── Rebuild BOOKING_DATES from Responses ───────────
@@ -788,8 +927,39 @@ function rebuildBookingDates() {
     });
   }
 
+  // Skip the rewrite entirely if nothing changed since last time — avoids
+  // needlessly re-writing (and re-locking) the whole sheet on every
+  // maintenance run when the Responses sheet hasn't been touched.
+  var rowsSig = Utilities.base64Encode(Utilities.newBlob(JSON.stringify(rows)).getBytes()).substring(0, 40);
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('bookingDatesSig') === rowsSig) return;
+  props.setProperty('bookingDatesSig', rowsSig);
+
   sheets.datesSheet.clearContents();
   sheets.datesSheet.getRange(1, 1, rows.length, 11).setValues(rows);
+}
+
+// ── Background maintenance — call this from a TIME-DRIVEN TRIGGER, not
+// from doGet ──────────────────────────────────────────────────────
+// This is the fix for slow syncing: rebuildBookingDates() and
+// autoBackfillQuotations() both do full-sheet reads/writes and open the
+// HA/MA Responses spreadsheets, which is exactly the kind of work that
+// should NOT block a user-facing page load or the 90-second auto-poll that
+// every open tab runs. Previously both ran inline inside doGet's default
+// 'sync' action, so every single sync — on load, and every 90s per open
+// tab, across every staff member — paid that full cost before returning
+// anything to the browser. That's what was making sync feel slow.
+//
+// SETUP (one-time): Apps Script editor → clock icon (Triggers) on the left
+// → + Add Trigger → function: scheduledMaintenance → Event source:
+// Time-driven → Minutes timer → Every 5 minutes → Save. After that, sync
+// itself only reads pre-built data and stays fast, while this keeps
+// BOOKING_DATES and quotations up to date in the background.
+function scheduledMaintenance() {
+  var ss = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
+  ensureSheets(ss);
+  try { rebuildBookingDates(); } catch(e1) { Logger.log('scheduledMaintenance rebuildBookingDates: ' + e1); }
+  try { autoBackfillQuotations(ss, 0); } catch(e2) { Logger.log('scheduledMaintenance autoBackfillQuotations: ' + e2); }
 }
 
 // ── doGet — returns JSON for the tracker ──────────
@@ -825,6 +995,188 @@ function jsonOut(e, obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// Fingerprints the form-response fields that get baked into a quotation PDF.
+// '' (no form submitted yet) fingerprints as ''. Any real answer changes the
+// fingerprint, so re-running the backfill after the artist submits — or
+// edits — their form is what triggers a fresh PDF.
+function hashFormResponse(fr) {
+  if (!fr) return '';
+  var keys = ['serviceFor','siderCount','eventCount','chargesPerLook','totalPayable','lashes','lenses',
+              'sareeDraping','dupattaDraping','accessories','hairExtensions','travel','additionalInfo','paymentType'];
+  var parts = keys.map(function(k){ return fr[k] || ''; });
+  if (!parts.some(function(p){ return p; })) return ''; // still nothing submitted
+  return Utilities.base64Encode(Utilities.newBlob(parts.join('|')).getBytes()).substring(0, 24);
+}
+
+// ── Shared backfill engine ──────────────────────────
+// Scans MA/HA form responses and, for every ALLOT row that matches one but
+// has no quotation PDF yet, generates it automatically. NEVER emails —
+// sending is always a separate, deliberate step (see emailQuotation /
+// emailAllQuotations below), so old/completed events don't suddenly spam
+// artists with mail the moment this runs.
+//
+// `limit` bounds how many NEW quotations it will generate in one call —
+// pass a small number (e.g. 15) when calling this quietly during every
+// regular sync so page loads stay fast; pass 0 ("no limit") for the manual
+// "Generate missing quotations now" button, which should catch up on
+// everything in one go.
+function autoBackfillQuotations(ss, limit) {
+  var availSheet = ss.getSheetByName(AVAIL_SHEET);
+  var aData = availSheet.getDataRange().getValues();
+  var results = { processed: 0, updated: 0, skipped: 0, noMatch: 0, errors: [] };
+
+  ['MA', 'HA'].forEach(function(role) {
+    if (limit &amp;&amp; results.updated &gt;= limit) return;
+    var sheetId = role === 'HA' ? HA_RESPONSE_SHEET_ID : MA_RESPONSE_SHEET_ID;
+    var tabName = role === 'HA' ? HA_RESPONSE_TAB : MA_RESPONSE_TAB;
+    if (!sheetId) return;
+    var respSS = SpreadsheetApp.openById(sheetId);
+    var respSheet = respSS.getSheetByName(tabName);
+    if (!respSheet) return;
+    var respData = respSheet.getDataRange().getValues();
+    if (respData.length &lt; 2) return;
+    var map = buildResponseColMap(respSheet);
+
+    for (var i = 1; i &lt; respData.length; i++) {
+      if (limit &amp;&amp; results.updated &gt;= limit) break;
+      var r = respData[i];
+      var artistName = rv(r, map, 'artistName');
+      var clientName = rv(r, map, 'clientName');
+      if (!artistName || !clientName) continue;
+      results.processed++;
+
+      // Find the matching ALLOT row in Artist Availability (same artist,
+      // ALLOT status, note's bride loosely matches this client).
+      // Collect ALL candidates first — a bride with several events (e.g. a
+      // 4-day destination booking) has one ALLOT row per event/date, all
+      // sharing the same artist+bride, so a single "first match wins" pick
+      // used to silently glue every one of those response rows onto
+      // whichever roster row happened to come first. Disambiguate by date
+      // when there's more than one candidate.
+      var candidates = [];
+      for (var j = 1; j &lt; aData.length; j++) {
+        if (String(aData[j][0]).trim().toLowerCase() !== artistName.toLowerCase()) continue;
+        if (String(aData[j][2]) !== 'ALLOT') continue;
+        var note = String(aData[j][3] || '');
+        var parsedBride = parseAllotNoteServer(note).bride;
+        if (!namesLooselyMatch(parsedBride || note, clientName)) continue;
+        candidates.push(j);
+      }
+      var matchRowIdx = -1;
+      if (candidates.length === 1) {
+        matchRowIdx = candidates[0]; // only one booking for this artist+bride — unambiguous, no date needed
+      } else if (candidates.length &gt; 1) {
+        var respDateRaw = rv(r, map, 'eventDate');
+        var respDateNorm = '';
+        try {
+          var respDt = parseFlexibleDate(respDateRaw);
+          if (respDt) respDateNorm = Utilities.formatDate(respDt, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        } catch(eDate) {}
+        var dateMatches = [];
+        for (var c = 0; c &lt; candidates.length; c++) {
+          if (respDateNorm &amp;&amp; normDate(aData[candidates[c]][1]) === respDateNorm) dateMatches.push(candidates[c]);
+        }
+        if (dateMatches.length === 1) {
+          matchRowIdx = dateMatches[0];
+        } else if (dateMatches.length &gt; 1) {
+          // More than one event on the SAME day for this artist+bride (e.g.
+          // two looks in one day) — date alone can't tell them apart. Fall
+          // back to an Event No column if the sheet has one (it doesn't by
+          // default; add a question like "Event No" to the MA/HA form to
+          // enable this automatically).
+          var respEventNo = rv(r, map, 'eventNoLabel');
+          if (respEventNo) {
+            for (var dnum = 0; dnum &lt; dateMatches.length; dnum++) {
+              var candNote = String(aData[dateMatches[dnum]][3] || '');
+              if (parseAllotNoteServer(candNote).eventNo.toLowerCase().indexOf(respEventNo.toLowerCase()) !== -1) {
+                matchRowIdx = dateMatches[dnum]; break;
+              }
+            }
+          }
+          // Still nothing — don't guess between two identical-looking same-day
+          // events; leave as noMatch so it's handled manually via Fill
+          // Quotation rather than risking the wrong one being overwritten.
+        }
+        // Multiple events, but this response row's date didn't match any of
+        // them exactly — don't guess; leave as noMatch rather than risk
+        // overwriting the wrong event's quotation.
+      }
+      if (matchRowIdx === -1) { results.noMatch++; continue; }
+
+      var existingUrl = String(aData[matchRowIdx][5] || '');
+      var existingSig = String(aData[matchRowIdx][7] || ''); // col H — fingerprint baked into the CURRENT pdf
+
+      var noteText = String(aData[matchRowIdx][3] || '');
+      var parsedNote = parseAllotNoteServer(noteText);
+      var allotDate = normDate(aData[matchRowIdx][1]);
+      var booking = findBookingDetails(ss, parsedNote.bride, parsedNote.eventNo);
+
+      var qData = {
+        artist: artistName,
+        role: role,
+        bride: parsedNote.bride || clientName,
+        eventNo: parsedNote.eventNo || '',
+        eventName: booking ? booking.eventName : '',
+        date: allotDate,
+        location: booking ? booking.location : rv(r, map, 'location'),
+        readyTime: booking ? booking.readyTime : ''
+      };
+      qData.formResponse = {
+        serviceFor:     rv(r, map, 'serviceFor'),
+        siderCount:     rv(r, map, 'siderCount'),
+        eventCount:     rv(r, map, 'eventCount'),
+        chargesPerLook: rv(r, map, 'chargesPerLook'),
+        totalPayable:   rv(r, map, 'totalPayable'),
+        lashes:         rv(r, map, 'lashes'),
+        lenses:         rv(r, map, 'lenses'),
+        sareeDraping:   rv(r, map, 'sareeDraping'),
+        dupattaDraping: rv(r, map, 'dupattaDraping'),
+        accessories:    rv(r, map, 'accessories'),
+        hairExtensions: rv(r, map, 'hairExtensions'),
+        travel:         rv(r, map, 'travel'),
+        additionalInfo: rv(r, map, 'additionalInfo'),
+        paymentType:    rv(r, map, 'paymentType')
+      };
+      var newSig = hashFormResponse(qData.formResponse);
+
+      // Skip only when there's truly nothing new to bring in:
+      //  - a quotation already exists, AND
+      //  - either the form still hasn't been submitted (newSig === ''), or
+      //    it has been submitted but matches exactly what's already in the PDF.
+      // This is the fix: previously ANY existing URL was skipped outright,
+      // which is why a quotation generated before the artist's form was
+      // submitted (the "Awaiting form submission" placeholder) could never
+      // be updated once they actually filled it in — e.g. Devangi's HA form
+      // for PRIYA HADAWALE 2 was submitted after her placeholder quotation
+      // had already been generated, so it sat stale forever.
+      if (existingUrl && (newSig === '' || newSig === existingSig)) { results.skipped++; continue; }
+
+      try {
+        // Replacing a stale placeholder — trash the old file so Drive
+        // doesn't accumulate obsolete "Awaiting form submission" PDFs.
+        if (existingUrl) {
+          var oldMatch = existingUrl.match(/[-\w]{25,}/);
+          if (oldMatch) { try { DriveApp.getFileById(oldMatch[0]).setTrashed(true); } catch(exOld) {} }
+        }
+        var pdfBlob = buildQuotationPdfBlob(qData);
+        var folder = getOrCreateQuotationsFolder();
+        var file = folder.createFile(pdfBlob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
+        availSheet.getRange(matchRowIdx + 1, 6).setValue(url);
+        availSheet.getRange(matchRowIdx + 1, 8).setValue(newSig);
+        aData[matchRowIdx][5] = url;
+        aData[matchRowIdx][7] = newSig;
+        results.updated++;
+      } catch(errB) {
+        results.errors.push(artistName + '/' + clientName + ': ' + errB);
+      }
+    }
+  });
+
+  return results;
+}
+
 function doGet(e) {
   var action = e &amp;&amp; e.parameter &amp;&amp; e.parameter.action ? e.parameter.action : 'sync';
 
@@ -853,7 +1205,7 @@ function doGet(e) {
     }
   }
 
-  // ── Generate + email a quotation PDF ────────────────
+  // ── Generate (+ maybe email) a quotation PDF ────────
   if (action === 'quotation' || action === 'refreshQuotation') {
     try {
       var ss2 = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
@@ -869,7 +1221,26 @@ function doGet(e) {
         location:  e.parameter.location || '',
         readyTime: e.parameter.readyTime || ''
       };
+      // Real data from the artist's own submitted MA/HA form, if it exists yet
       qData.formResponse = findFormResponse(qData.role, qData.artist, qData.bride, qData.date);
+      // Anything staff typed manually into the Fill Quotation modal — wins
+      // field-by-field over the form response (see buildQuotationPdfBlob)
+      qData.manual = {
+        serviceFor:     e.parameter.serviceFor || '',
+        siderCount:     e.parameter.siderCount || '',
+        eventCount:     e.parameter.eventCount || '',
+        chargesPerLook: e.parameter.chargesPerLook || '',
+        totalPayable:   e.parameter.totalPayable || '',
+        lashes:         e.parameter.lashes || '',
+        lenses:         e.parameter.lenses || '',
+        sareeDraping:   e.parameter.sareeDraping || '',
+        dupattaDraping: e.parameter.dupattaDraping || '',
+        accessories:    e.parameter.accessories || '',
+        hairExtensions: e.parameter.hairExtensions || '',
+        travel:         e.parameter.travel || '',
+        paymentType:    e.parameter.paymentType || '',
+        additionalInfo: e.parameter.additionalInfo || ''
+      };
 
       // On refresh, remove the old quotation file first so Drive doesn't fill up with stale versions
       if (action === 'refreshQuotation' &amp;&amp; e.parameter.oldUrl) {
@@ -885,9 +1256,11 @@ function doGet(e) {
 
       var email = lookupArtistEmail(ss2, qData.artist);
       var emailed = false;
-      // On the initial quotation, always email. On a refresh, only re-email if we
-      // actually found the full form response (otherwise nothing new to send).
-      var shouldEmail = email &amp;&amp; (action === 'quotation' || qData.formResponse);
+      // Honour noEmail=1 (always sent by the Fill Quotation modal — sending
+      // there is a deliberate separate step, not automatic). Otherwise email
+      // on the initial quotation, or on a refresh only if there's now a real
+      // form response to send.
+      var shouldEmail = email &amp;&amp; !e.parameter.noEmail &amp;&amp; (action === 'quotation' || qData.formResponse);
       if (shouldEmail) {
         MailApp.sendEmail({
           to: email,
@@ -900,7 +1273,26 @@ function doGet(e) {
           attachments: [pdfBlob]
         });
         emailed = true;
+        markQuotationEmailed(ss2, qData.artist, url);
       }
+
+      // Keep QuoteDataSig in step with what was just baked into the PDF —
+      // matches on artist + date + bride/eventNo prefix, same as doPost's
+      // upsert matcher. Without this, the next autoBackfillQuotations run
+      // would see an empty sig and regenerate this same PDF again once more.
+      try {
+        var sigVal = hashFormResponse(qData.formResponse);
+        var avSheet = ss2.getSheetByName(AVAIL_SHEET);
+        var avData = avSheet.getDataRange().getValues();
+        var evKey = (qData.bride || '') + ' — ' + (qData.eventNo || '');
+        for (var si = 1; si &lt; avData.length; si++) {
+          if (String(avData[si][0]) !== qData.artist) continue;
+          if (normDate(avData[si][1]) !== qData.date) continue;
+          if (String(avData[si][3] || '').indexOf(evKey) !== 0) continue;
+          avSheet.getRange(si + 1, 8).setValue(sigVal);
+          break;
+        }
+      } catch(exSig) { Logger.log('sig persist: ' + exSig); }
 
       return jsonOut(e, { ok: true, url: url, emailed: emailed, email: email || '', foundResponse: !!qData.formResponse });
     } catch(err) {
@@ -908,6 +1300,78 @@ function doGet(e) {
     }
   }
 
+  // ── Email an already-generated quotation ────────────
+  // Used by the per-card "Send" button once a PDF already exists — no
+  // regeneration, just attach the existing Drive file and mail it.
+  if (action === 'emailQuotation') {
+    try {
+      var ss3 = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
+      var artist3 = e.parameter.artist || '';
+      var role3 = e.parameter.role || '';
+      var bride3 = e.parameter.bride || '';
+      var url3 = e.parameter.url || '';
+      if (!url3) return jsonOut(e, { ok:false, error:'No PDF URL supplied' });
+      var email3 = lookupArtistEmail(ss3, artist3);
+      if (!email3) return jsonOut(e, { ok:false, error:'No email on file for ' + artist3 + ' — add it in the Artist Emails sheet first' });
+      var idMatch3 = String(url3).match(/[-\w]{25,}/);
+      var pdfFile3 = idMatch3 ? DriveApp.getFileById(idMatch3[0]) : null;
+      if (!pdfFile3) return jsonOut(e, { ok:false, error:'Could not read the PDF file' });
+      MailApp.sendEmail({
+        to: email3,
+        subject: 'Assignment Quotation — ' + bride3 + (role3 ? ' (' + role3 + ')' : ''),
+        body: 'Hi ' + artist3 + ',\n\nPlease find your assignment quotation attached.\n\nThank you.',
+        attachments: [pdfFile3.getAs('application/pdf')]
+      });
+      markQuotationEmailed(ss3, artist3, url3);
+      return jsonOut(e, { ok:true, email: email3 });
+    } catch(err) {
+      return jsonOut(e, { ok: false, error: String(err) });
+    }
+  }
+
+  // ── Bulk send: email every generated quotation that hasn't been sent yet ──
+  // Skips rows with no PDF yet, no email on file, or already marked
+  // EmailedAt — so it's always safe to run more than once (no double-sends).
+  if (action === 'emailAllQuotations') {
+    try {
+      var ss5 = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
+      ensureSheets(ss5);
+      var availSheet5 = ss5.getSheetByName(AVAIL_SHEET);
+      var data5 = availSheet5.getDataRange().getValues();
+      var results5 = { sent: 0, skippedNoEmail: 0, skippedAlreadySent: 0, skippedNoPdf: 0, errors: [] };
+
+      for (var i5 = 1; i5 &lt; data5.length; i5++) {
+        var row5 = data5[i5];
+        var artist5 = String(row5[0] || '').trim();
+        var url5 = String(row5[5] || '').trim();
+        var emailedAt5 = row5[6];
+        if (!url5) continue; // no quotation generated yet — nothing to send
+        if (emailedAt5) { results5.skippedAlreadySent++; continue; }
+        var email5 = lookupArtistEmail(ss5, artist5);
+        if (!email5) { results5.skippedNoEmail++; continue; }
+        try {
+          var idMatch5 = url5.match(/[-\w]{25,}/);
+          var pdfFile5 = idMatch5 ? DriveApp.getFileById(idMatch5[0]) : null;
+          if (!pdfFile5) { results5.skippedNoPdf++; continue; }
+          var parsed5 = parseAllotNoteServer(String(row5[3] || ''));
+          MailApp.sendEmail({
+            to: email5,
+            subject: 'Assignment Quotation — ' + (parsed5.bride || artist5),
+            body: 'Hi ' + artist5 + ',\n\nPlease find your assignment quotation attached.\n\nThank you.',
+            attachments: [pdfFile5.getAs('application/pdf')]
+          });
+          availSheet5.getRange(i5 + 1, 7).setValue(new Date());
+          results5.sent++;
+          Utilities.sleep(150); // gentle pacing so Mail/Drive don't get hammered on a big roster
+        } catch(errX) {
+          results5.errors.push(artist5 + ': ' + errX);
+        }
+      }
+      return jsonOut(e, { ok: true, results: results5 });
+    } catch(err) {
+      return jsonOut(e, { ok: false, error: String(err) });
+    }
+  }
 
   // ── One-time backfill: generate quotations for forms already filled in ──
   // before this feature existed. Safe to run more than once — skips any
@@ -917,86 +1381,7 @@ function doGet(e) {
     try {
       var ss4 = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
       ensureSheets(ss4);
-      var availSheet4 = ss4.getSheetByName(AVAIL_SHEET);
-      var aData4 = availSheet4.getDataRange().getValues();
-
-      var results = { processed: 0, updated: 0, skipped: 0, noMatch: 0, errors: [] };
-
-      ['MA', 'HA'].forEach(function(role) {
-        var sheetId = role === 'HA' ? HA_RESPONSE_SHEET_ID : MA_RESPONSE_SHEET_ID;
-        var tabName = role === 'HA' ? HA_RESPONSE_TAB : MA_RESPONSE_TAB;
-        if (!sheetId) return;
-        var respSS = SpreadsheetApp.openById(sheetId);
-        var respSheet = respSS.getSheetByName(tabName);
-        if (!respSheet) return;
-        var respData = respSheet.getDataRange().getValues();
-
-        for (var i = 1; i &lt; respData.length; i++) {
-          var r = respData[i];
-          var artistName = String(r[RESPONSE_COLS.artistName] || '').trim();
-          var clientName = String(r[RESPONSE_COLS.clientName] || '').trim();
-          if (!artistName || !clientName) continue;
-          results.processed++;
-
-          // Find the matching ALLOT row in Artist Availability (same artist,
-          // ALLOT status, note mentions this client)
-          var matchRowIdx = -1;
-          for (var j = 1; j &lt; aData4.length; j++) {
-            if (String(aData4[j][0]).trim().toLowerCase() !== artistName.toLowerCase()) continue;
-            if (String(aData4[j][2]) !== 'ALLOT') continue;
-            var note = String(aData4[j][3] || '');
-            if (note.toLowerCase().indexOf(clientName.toLowerCase()) === -1) continue;
-            matchRowIdx = j;
-            break;
-          }
-          if (matchRowIdx === -1) { results.noMatch++; continue; }
-
-          var existingUrl = String(aData4[matchRowIdx][5] || '');
-          if (existingUrl) { results.skipped++; continue; } // already has one — don't regenerate
-
-          var noteText = String(aData4[matchRowIdx][3] || '');
-          var parsedNote = parseAllotNote(noteText);
-          var allotDate = normDate(aData4[matchRowIdx][1]);
-          var booking = findBookingDetails(ss4, parsedNote.bride, parsedNote.eventNo);
-
-          var qData4 = {
-            artist: artistName,
-            role: role,
-            bride: parsedNote.bride || clientName,
-            eventNo: parsedNote.eventNo || '',
-            eventName: booking ? booking.eventName : '',
-            date: allotDate,
-            location: booking ? booking.location : String(r[RESPONSE_COLS.location] || ''),
-            readyTime: booking ? booking.readyTime : ''
-          };
-          qData4.formResponse = {
-            serviceFor:     String(r[RESPONSE_COLS.serviceFor] || ''),
-            siderCount:     String(r[RESPONSE_COLS.siderCount] || ''),
-            eventCount:     String(r[RESPONSE_COLS.eventCount] || ''),
-            chargesPerLook: String(r[RESPONSE_COLS.chargesPerLook] || ''),
-            totalPayable:   String(r[RESPONSE_COLS.totalPayable] || ''),
-            lashes:         String(r[RESPONSE_COLS.lashes] || ''),
-            lenses:         String(r[RESPONSE_COLS.lenses] || ''),
-            travel:         String(r[RESPONSE_COLS.travel] || ''),
-            additionalInfo: String(r[RESPONSE_COLS.additionalInfo] || ''),
-            paymentType:    String(r[RESPONSE_COLS.paymentType] || '')
-          };
-
-          try {
-            var pdfBlob4 = buildQuotationPdfBlob(qData4);
-            var folder4 = getOrCreateQuotationsFolder();
-            var file4 = folder4.createFile(pdfBlob4);
-            file4.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-            var url4 = 'https://drive.google.com/file/d/' + file4.getId() + '/view';
-            availSheet4.getRange(matchRowIdx + 1, 6).setValue(url4);
-            aData4[matchRowIdx][5] = url4;
-            results.updated++;
-          } catch(err4) {
-            results.errors.push(artistName + '/' + clientName + ': ' + err4);
-          }
-        }
-      });
-
+      var results = autoBackfillQuotations(ss4, 0); // 0 = no limit, catch up on everything
       return jsonOut(e, { ok: true, results: results });
     } catch(err) {
       return jsonOut(e, { ok: false, error: String(err) });
@@ -1006,7 +1391,12 @@ function doGet(e) {
   try {
     var ss = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
     ensureSheets(ss);
-    rebuildBookingDates();
+    // Safety net only — if BOOKING_DATES doesn't exist yet (brand new sheet),
+    // build it once so sync isn't returning nothing. Otherwise this is now
+    // handled by the scheduledMaintenance() time-driven trigger (see setup
+    // instructions below), NOT on every request — see note below on why.
+    var _datesCheck = ss.getSheetByName(DATES_SHEET);
+    if (!_datesCheck || _datesCheck.getLastRow() &lt; 1) rebuildBookingDates();
 
     // --- Read BOOKING_DATES ---
     var datesSheet = ss.getSheetByName(DATES_SHEET);
@@ -1035,7 +1425,8 @@ function doGet(e) {
       var a = aData[j];
       if (!a[0] || !a[1]) continue;
       avail.push({ artist: String(a[0]), date: normDate(a[1]),
-                   status: String(a[2]), note: String(a[3]), quotationUrl: String(a[5] || '') });
+                   status: String(a[2]), note: String(a[3]), quotationUrl: String(a[5] || ''),
+                   emailedAt: a[6] ? String(a[6]) : '' });
     }
 
     return jsonOut(e, { ok: true, bookings: bookings, avail: avail });
@@ -1085,7 +1476,7 @@ function doPost(e) {
           availSheet.getRange(matchIdx + 1, 6).setValue(payload.quotationUrl);
         }
       } else {
-        availSheet.appendRow([payload.artist, payload.date, payload.status, payload.note || '', Session.getActiveUser().getEmail(), payload.quotationUrl || '']);
+        availSheet.appendRow([payload.artist, payload.date, payload.status, payload.note || '', Session.getActiveUser().getEmail(), payload.quotationUrl || '', '']);
       }
     } else if (payload.action === 'delete') {
       for (var k = 1; k &lt; data.length; k++) {
@@ -1111,10 +1502,14 @@ function doPost(e) {
     return ContentService.createTextOutput('error: '+err.toString());
   }
 }
+
 </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
           <div style="background:#EAF3DE;border:1px solid #C0DD97;border-radius:8px;padding:10px;font-size:11px;color:#27500A;line-height:1.6">
             <b>How to deploy:</b> Extensions → Apps Script → paste the full code above → Save → Deploy → New deployment → Web App → Execute as <b>Me</b> → Who has access: <b>Anyone</b> → Deploy → copy the URL → paste in Step 1.
+          </div>
+          <div style="background:#E6F1FB;border:1px solid #B5D4F4;border-radius:8px;padding:10px;font-size:11px;color:#0C447C;line-height:1.6">
+            <b>One more setup step — makes sync fast:</b> in the Apps Script editor, click the clock icon (Triggers) on the left → + Add Trigger → function <code style="background:#fff;border-radius:3px;padding:1px 5px">scheduledMaintenance</code> → Event source <b>Time-driven</b> → Minutes timer → <b>Every 5 minutes</b> → Save. This moves the heavy sheet rebuild + quotation backfill off every page load / 90-second auto-poll and into the background, so syncing itself stays quick.
           </div>
           <div style="background:#FFF8EC;border:1px solid #FDE8C3;border-radius:8px;padding:10px;font-size:11px;color:#7A4E00;line-height:1.6">
             <b>Key format reminder:</b> Your sheet's combined column must have labels like<br>
@@ -1580,6 +1975,39 @@ function runBackfillQuotations(){
   });
 }
 
+function runEmailAllQuotations(){
+  if(!gasUrl){toast('Connect your Web App URL in Step 1 first');return;}
+  var btn=document.getElementById('email-all-btn');
+  var status=document.getElementById('email-all-status');
+  btn.disabled=true;
+  btn.textContent='⏳ Sending… this can take a minute for a lot of quotations';
+  status.innerHTML='';
+  reliableGet(gasUrl+'?action=emailAllQuotations').then(function(data){
+    btn.disabled=false;
+    btn.textContent='📧 Send all quotations now';
+    if(!data.ok){
+      status.innerHTML='<div style="padding:10px;background:#FFF1F3;border-radius:10px;color:#9B1A2F;font-size:13px;font-weight:600">Failed: '+esc(data.error||'unknown error')+'</div>';
+      return;
+    }
+    var r=data.results;
+    var lines='<div style="padding:12px;background:#EAF3DE;border-radius:10px;color:#27500A;font-size:13px;line-height:1.7">'
+      +'<b>Done!</b><br>'
+      +'📧 '+r.sent+' email'+(r.sent!==1?'s':'')+' sent<br>'
+      +'⏭️ '+r.skippedAlreadySent+' already sent before (skipped)<br>'
+      +(r.skippedNoEmail?'✉️ '+r.skippedNoEmail+' skipped — no email on file<br>':'')
+      +(r.skippedNoPdf?'❓ '+r.skippedNoPdf+' skipped — PDF file missing<br>':'')
+      +(r.errors&&r.errors.length?'⚠️ '+r.errors.length+' error'+(r.errors.length!==1?'s':'')+' — check Apps Script logs<br>':'')
+      +'</div>';
+    status.innerHTML=lines;
+    if(r.sent>0)toast(r.sent+' quotation'+(r.sent!==1?'s':'')+' emailed to artists');
+  }).catch(function(err){
+    btn.disabled=false;
+    btn.textContent='📧 Send all quotations now';
+    status.innerHTML='<div style="padding:10px;background:#FFF1F3;border-radius:10px;color:#9B1A2F;font-size:13px;font-weight:600">Request failed — check connection and try again</div>';
+    console.warn('emailAllQuotations failed',err);
+  });
+}
+
 function loadPastedData(){
   var raw=document.getElementById('paste-input').value.trim();
   var ps=document.getElementById('paste-status');
@@ -1969,24 +2397,37 @@ var ALLOT_FORM_LINKS={
 // ── Form pre-fill wiring ────────────────────────────
 // Fill in the entry.XXXXXXXXX IDs below once known (see: open the form →
 // ⋮ menu → "Get pre-filled link" → fill sample values for Event Date,
-// Makeup/Hair Artist Name, Client Name, Location → Get Link → copy the
-// resulting URL and read off each field's entry.XXXXXXXXX id from it).
+// Makeup/Hair Artist Name, Client Name, Location, Event No → Get Link →
+// copy the resulting URL and read off each field's entry.XXXXXXXXX id from it).
 // Until these are filled in, the "Fill Form" button just opens the blank form.
+//
+// eventNo is the fix for "Event No should automatically get fetched" — add
+// a short-answer "Event No" question to both the MA and HA Google Forms
+// (any wording is fine, e.g. "Event No" / free text "1", "2", "Event 3"),
+// grab its entry.XXXXXXXXX id the same way as the other fields, and paste
+// it in below. Once that's set, the artist never types it — the roster
+// already knows which event this allotment is (see confirmAllot →
+// showAllotFormLink), so it gets carried straight into the pre-filled link
+// and lands in the response sheet automatically. That's also what lets
+// autoBackfillQuotations tell apart two events on the same day (see the
+// eventNoLabel matching added earlier) — without this, same-day multi-event
+// bookings can't be disambiguated automatically at all.
 var FORM_FIELD_IDS={
-  MA:{eventDate:'entry.1549670694', artistName:'entry.1339200122', clientName:'entry.1960109089', location:'entry.381615111'},
-  HA:{eventDate:'entry.1560351672', artistName:'entry.2057952068', clientName:'entry.1039900537', location:'entry.2103359931'}
+  MA:{eventDate:'entry.1549670694', artistName:'entry.1339200122', clientName:'entry.1960109089', location:'entry.381615111', eventNo:''},
+  HA:{eventDate:'entry.1560351672', artistName:'entry.2057952068', clientName:'entry.1039900537', location:'entry.2103359931', eventNo:''}
 };
-function buildPrefillUrl(role, artist, bride, eventDate, location){
+function buildPrefillUrl(role, artist, bride, eventDate, location, eventNo){
   var base=ALLOT_FORM_LINKS[role];
   if(!base)return '';
   var ids=FORM_FIELD_IDS[role]||{};
-  var hasAnyId=ids.eventDate||ids.artistName||ids.clientName||ids.location;
+  var hasAnyId=ids.eventDate||ids.artistName||ids.clientName||ids.location||ids.eventNo;
   if(!hasAnyId)return base; // no IDs configured yet — plain link
   var params=[];
   if(ids.eventDate&&eventDate)params.push(ids.eventDate+'='+encodeURIComponent(eventDate));
   if(ids.artistName&&artist)params.push(ids.artistName+'='+encodeURIComponent(artist));
   if(ids.clientName&&bride)params.push(ids.clientName+'='+encodeURIComponent(bride));
   if(ids.location&&location)params.push(ids.location+'='+encodeURIComponent(location));
+  if(ids.eventNo&&eventNo)params.push(ids.eventNo+'='+encodeURIComponent(eventNo));
   if(!params.length)return base;
   var sep=base.indexOf('?')===-1?'?':'&';
   return base+sep+'usp=pp_url&'+params.join('&');
@@ -2063,7 +2504,8 @@ function showAllotFormLink(role){
   var artist=document.getElementById('artist-sel').value;
   var bride=allotBride?allotBride.bride:'';
   var location=allotBride?allotBride.location:'';
-  var link=buildPrefillUrl(role, artist, bride, formatDateForForm(activeDate), location) || ALLOT_FORM_LINKS[role];
+  var eventNo=allotBride?allotBride.eventNo:'';
+  var link=buildPrefillUrl(role, artist, bride, formatDateForForm(activeDate), location, eventNo) || ALLOT_FORM_LINKS[role];
   var btn=document.getElementById('allot-form-btn');
   btn.href=link||'#';
   btn.textContent='📝 Fill '+role+' Form';
@@ -2116,18 +2558,38 @@ function refreshQuotation(role, artist, bride, ds, location, oldUrl){
 // Lenses, Travel, Payment Type, etc.) instead of relying on the artist's
 // external Google Form. Generates the PDF first; emailing is a separate,
 // explicit step so she can check it before it goes out.
-var QFILL_FIELDS=[
-  {key:'serviceFor',     label:'Makeup/Hairstyle For (bride/groom/sider name)'},
+//
+// IMPORTANT: field set depends on role. Previously this was one fixed array
+// (with Lashes/Lenses baked in) used for EVERY role — so an HA (Hair
+// Artist) booking would show Makeup fields instead of Saree Draping,
+// Dupatta Draping, Accessories, and Hair Extensions. Now it's built per
+// role so HA bookings get HA fields and MA bookings get MA fields.
+var QFILL_COMMON_FIELDS=[
   {key:'siderCount',     label:'No. of Sider/Bride/Groom'},
   {key:'eventCount',     label:'No. of Events'},
   {key:'chargesPerLook', label:'Charges Approved per Look'},
-  {key:'totalPayable',   label:'Total Payable Charges'},
+  {key:'totalPayable',   label:'Total Payable Charges'}
+];
+var QFILL_HA_ONLY_FIELDS=[
+  {key:'sareeDraping',   label:'Saree Draping'},
+  {key:'dupattaDraping', label:'Dupatta Draping'},
+  {key:'accessories',    label:'Accessories (Small)'},
+  {key:'hairExtensions', label:'Hair Extensions'}
+];
+var QFILL_MA_ONLY_FIELDS=[
   {key:'lashes',         label:'Lashes'},
-  {key:'lenses',         label:'Lenses'},
+  {key:'lenses',         label:'Lenses'}
+];
+var QFILL_TAIL_FIELDS=[
   {key:'travel',         label:'Travel'},
   {key:'paymentType',    label:'Payment Type'},
   {key:'additionalInfo', label:'Additional Information'}
 ];
+function getQfillFields(role){
+  var forLabel=role==='HA'?'Hairstyle For (bride/groom/sider name)':'Makeup/Hairstyle For (bride/groom/sider name)';
+  var roleFields=role==='HA'?QFILL_HA_ONLY_FIELDS:QFILL_MA_ONLY_FIELDS;
+  return [{key:'serviceFor',label:forLabel}].concat(QFILL_COMMON_FIELDS, roleFields, QFILL_TAIL_FIELDS);
+}
 var qfillCtx=null;
 function openQuotationFillModal(artist, ds, bride, eventNo, note, existingUrl){
   var roleMatch=(note||'').match(/\b(MA|HA|DR|AST|CC)\b/);
@@ -2135,7 +2597,7 @@ function openQuotationFillModal(artist, ds, bride, eventNo, note, existingUrl){
   qfillCtx={artist:artist, ds:ds, bride:bride, eventNo:eventNo, role:role, existingUrl:existingUrl||'', newUrl:''};
   document.getElementById('qfill-sub').textContent=artist+' — '+role+(bride?' — '+bride:'')+(eventNo?' ('+eventNo+')':'');
   var draft=quotationDrafts[draftKey(artist,ds,bride,eventNo)]||{};
-  document.getElementById('qfill-fields').innerHTML=QFILL_FIELDS.map(function(f){
+  document.getElementById('qfill-fields').innerHTML=getQfillFields(role).map(function(f){
     var val=esc(draft[f.key]||'');
     return '<div><div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">'+f.label+'</div>'
       +'<input id="qf-'+f.key+'" type="text" value="'+val+'" style="width:100%;height:38px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 10px;font-size:13px;font-family:inherit">'
@@ -2151,8 +2613,10 @@ function closeQuotationFillModal(){document.getElementById('qfill-modal-wrap').s
 
 function collectQfillFields(){
   var data={};
-  QFILL_FIELDS.forEach(function(f){
-    var v=document.getElementById('qf-'+f.key).value.trim();
+  getQfillFields(qfillCtx?qfillCtx.role:'MA').forEach(function(f){
+    var el=document.getElementById('qf-'+f.key);
+    if(!el)return;
+    var v=el.value.trim();
     if(v)data[f.key]=v;
   });
   return data;
@@ -2620,25 +3084,40 @@ function renderBookingBlock(b, ds){
     var roleMatch=parsed.roleText.match(/\b(MA|HA|DR|AST|CC)\b/);
     var role=roleMatch?roleMatch[1]:'';
     var extra=role?parsed.roleText.slice(parsed.roleText.indexOf(role)+role.length).replace(/^[\s—-]+/,'').trim():parsed.roleText;
-    var entry={artist:a.artist, quotationUrl:a.quotationUrl, extra:extra};
+    var entry={artist:a.artist, quotationUrl:a.quotationUrl, extra:extra, note:a.note};
     if(role==='MA'||role==='HA')roleMap[role]=entry;
     else otherRoles.push({role:role||'?', entry:entry});
   });
+
+  // Same pattern as the Sider box below: if a PDF already exists, show
+  // View/Edit/Send; otherwise show "Fill Quotation" — which, once the
+  // artist's real MA/HA form is submitted, is replaced automatically on the
+  // next sync (no manual click needed). This replaces the old client-only
+  // "quick local PDF" button, which never checked whether the real form had
+  // been filled and so always looked blank.
+  function quoteActions(role, e){
+    var artistEsc=e.artist.replace(/'/g,"\\'");
+    var brideEsc=b.bride.replace(/'/g,"\\'");
+    var eventNoEsc=b.eventNo.replace(/'/g,"\\'");
+    var noteEsc=(e.note||'').replace(/'/g,"\\'");
+    if(e.quotationUrl){
+      return ' <a href="'+e.quotationUrl+'" target="_blank" rel="noopener" style="font-size:11px;font-weight:700;color:#fff;background:#0F9B8E;text-decoration:none;border-radius:5px;padding:2px 8px;margin-left:6px">✅ View PDF</a>'
+        +' <a href="javascript:void(0)" onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+noteEsc+'\',\''+e.quotationUrl+'\')" style="font-size:10.5px;font-weight:700;color:#888;margin-left:6px">✏️ Edit</a>'
+        +' <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artistEsc+'\',\''+role+'\',\''+brideEsc+'\',\''+e.quotationUrl+'\')" style="font-size:10.5px;font-weight:700;color:#A3365A;margin-left:6px">📧 Send</a>';
+    }
+    return ' <button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+noteEsc+'\',\'\')" style="margin-left:6px;height:22px;padding:0 8px;border-radius:5px;background:#0F9B8E;color:#fff;border:none;font-size:10.5px;font-weight:700;cursor:pointer">📄 Fill Quotation</button>';
+  }
 
   function roleLine(role){
     var e=roleMap[role];
     var roleChip='<span style="display:inline-block;font-size:13px;font-weight:800;color:#fff;background:#A3365A;border-radius:6px;padding:2px 9px;margin-right:6px;letter-spacing:.3px">'+role+'</span>';
     if(!e)return roleChip+'<span style="color:#bbb;font-size:13px">—</span>';
-    var quoteBit=e.quotationUrl
-      ? ' <a href="'+e.quotationUrl+'" target="_blank" rel="noopener" style="font-size:11px;font-weight:700;color:#fff;background:#0F9B8E;text-decoration:none;border-radius:5px;padding:2px 8px;margin-left:6px">✅ View Quotation</a>'
-      : ' <button onclick="downloadQuotationPdf(\''+role+'\',\''+e.artist.replace(/'/g,"\\'")+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(b.location||'').replace(/'/g,"\\'")+'\')" style="background:none;border:none;cursor:pointer;font-size:12px;color:#0F9B8E;padding:0;margin-left:5px" title="Quick local PDF">📄</button>';
-    return roleChip+'<span style="font-size:15px;font-weight:800;color:#222">'+esc(e.artist)+'</span>'+quoteBit;
+    return roleChip+'<span style="font-size:15px;font-weight:800;color:#222">'+esc(e.artist)+'</span>'+quoteActions(role,e);
   }
 
   var otherRolesHtml=otherRoles.map(function(o){
     var e=o.entry;
-    var quoteBit=e.quotationUrl?' <a href="'+e.quotationUrl+'" target="_blank" rel="noopener" style="font-size:9.5px;font-weight:700;color:#0F9B8E">✅ View</a>':'';
-    return '<div style="font-size:11.5px;color:#444;margin-top:2px"><b>'+esc(o.role)+':</b> '+esc(e.artist)+quoteBit+'</div>';
+    return '<div style="font-size:11.5px;color:#444;margin-top:2px"><b>'+esc(o.role)+':</b> '+esc(e.artist)+quoteActions(o.role,e)+'</div>';
   }).join('');
 
   // ── Sider info box ──────────────────────────────

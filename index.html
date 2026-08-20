@@ -1023,7 +1023,7 @@ function hashFormResponse(fr) {
 function autoBackfillQuotations(ss, limit) {
   var availSheet = ss.getSheetByName(AVAIL_SHEET);
   var aData = availSheet.getDataRange().getValues();
-  var results = { processed: 0, updated: 0, skipped: 0, noMatch: 0, errors: [] };
+  var results = { processed: 0, updated: 0, skipped: 0, noMatch: 0, sigBackfilled: 0, errors: [] };
 
   ['MA', 'HA'].forEach(function(role) {
     if (limit &amp;&amp; results.updated &gt;= limit) return;
@@ -1044,6 +1044,17 @@ function autoBackfillQuotations(ss, limit) {
       var clientName = rv(r, map, 'clientName');
       if (!artistName || !clientName) continue;
       results.processed++;
+
+      // This response row's own event date, normalized — computed once,
+      // unconditionally, so it's reliably available later (both for
+      // same-day multi-event disambiguation below AND for the
+      // known-genuinely-blank check further down) regardless of how many
+      // candidate roster rows this artist+bride combination has.
+      var respDateNormTop = '';
+      try {
+        var respDtTop = parseFlexibleDate(rv(r, map, 'eventDate'));
+        if (respDtTop) respDateNormTop = Utilities.formatDate(respDtTop, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      } catch(eDateTop) {}
 
       // Find the matching ALLOT row in Artist Availability (same artist,
       // ALLOT status, note's bride loosely matches this client).
@@ -1066,15 +1077,9 @@ function autoBackfillQuotations(ss, limit) {
       if (candidates.length === 1) {
         matchRowIdx = candidates[0]; // only one booking for this artist+bride — unambiguous, no date needed
       } else if (candidates.length &gt; 1) {
-        var respDateRaw = rv(r, map, 'eventDate');
-        var respDateNorm = '';
-        try {
-          var respDt = parseFlexibleDate(respDateRaw);
-          if (respDt) respDateNorm = Utilities.formatDate(respDt, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        } catch(eDate) {}
         var dateMatches = [];
         for (var c = 0; c &lt; candidates.length; c++) {
-          if (respDateNorm &amp;&amp; normDate(aData[candidates[c]][1]) === respDateNorm) dateMatches.push(candidates[c]);
+          if (respDateNormTop &amp;&amp; normDate(aData[candidates[c]][1]) === respDateNormTop) dateMatches.push(candidates[c]);
         }
         if (dateMatches.length === 1) {
           matchRowIdx = dateMatches[0];
@@ -1139,17 +1144,37 @@ function autoBackfillQuotations(ss, limit) {
       };
       var newSig = hashFormResponse(qData.formResponse);
 
-      // Skip only when there's truly nothing new to bring in:
-      //  - a quotation already exists, AND
-      //  - either the form still hasn't been submitted (newSig === ''), or
-      //    it has been submitted but matches exactly what's already in the PDF.
-      // This is the fix: previously ANY existing URL was skipped outright,
-      // which is why a quotation generated before the artist's form was
-      // submitted (the "Awaiting form submission" placeholder) could never
-      // be updated once they actually filled it in — e.g. Devangi's HA form
-      // for PRIYA HADAWALE 2 was submitted after her placeholder quotation
-      // had already been generated, so it sat stale forever.
-      if (existingUrl && (newSig === '' || newSig === existingSig)) { results.skipped++; continue; }
+      // Case 1: nothing submitted yet for this booking — leave exactly as
+      // is (don't touch the URL/sig either way). This is what keeps a
+      // genuinely-unfilled booking, like a placeholder generated before the
+      // artist's form was submitted, showing "Fill Quotation" in the UI.
+      if (existingUrl && newSig === '') { results.skipped++; continue; }
+
+      // Case 2: a quotation URL exists from BEFORE the QuoteDataSig column
+      // was introduced (existingSig is blank), but real form data now
+      // matches it. Rather than regenerating a PDF that's almost certainly
+      // already correct — which would just churn Drive for no reason —
+      // quietly backfill the sig so the UI correctly shows "View PDF" for
+      // it going forward, without altering the existing file.
+      //
+      // Exception: artistName+clientName pairs known to have been genuinely
+      // blank (not just untracked) must NOT take this shortcut — their
+      // existing PDF really is just the placeholder, so it needs a full
+      // regeneration once real data shows up, not just a sig stamp.
+      var isKnownGenuinelyBlank = /shubham/i.test(artistName) && /priya\s*hadawale/i.test(clientName)
+        && respDateNormTop && /-(17|18)$/.test(respDateNormTop);
+      if (existingUrl && existingSig === '' && newSig !== '' && !isKnownGenuinelyBlank) {
+        availSheet.getRange(matchRowIdx + 1, 8).setValue(newSig);
+        aData[matchRowIdx][7] = newSig;
+        results.sigBackfilled++;
+        continue;
+      }
+
+      // Case 3: already up to date (sig matches what's submitted) — skip.
+      if (existingUrl && newSig === existingSig) { results.skipped++; continue; }
+
+      // Anything else (no URL yet, or data has genuinely changed since the
+      // sig was last set) falls through to generate/regenerate below.
 
       try {
         // Replacing a stale placeholder — trash the old file so Drive
@@ -1426,7 +1451,7 @@ function doGet(e) {
       if (!a[0] || !a[1]) continue;
       avail.push({ artist: String(a[0]), date: normDate(a[1]),
                    status: String(a[2]), note: String(a[3]), quotationUrl: String(a[5] || ''),
-                   emailedAt: a[6] ? String(a[6]) : '' });
+                   emailedAt: a[6] ? String(a[6]) : '', quoteDataSig: a[7] ? String(a[7]) : '' });
     }
 
     return jsonOut(e, { ok: true, bookings: bookings, avail: avail });
@@ -1757,10 +1782,11 @@ function getAllotments(a,d){
   Object.keys(allotments).forEach(function(k){if(k.indexOf(pre)===0)out.push(allotments[k]);});
   return out;
 }
-function setAllotment(a,d,bride,eventNo,note,quotationUrl){
+function setAllotment(a,d,bride,eventNo,note,quotationUrl,quoteDataSig){
   var key=allotKey(a,d,bride,eventNo);
   var existingUrl=quotationUrl!==undefined?quotationUrl:(allotments[key]?allotments[key].quotationUrl:'');
-  allotments[key]={artist:a,date:d,bride:bride||'',eventNo:eventNo||'',note:note,quotationUrl:existingUrl||''};
+  var existingSig=quoteDataSig!==undefined?quoteDataSig:(allotments[key]?allotments[key].quoteDataSig:'');
+  allotments[key]={artist:a,date:d,bride:bride||'',eventNo:eventNo||'',note:note,quotationUrl:existingUrl||'',quoteDataSig:existingSig||''};
   saveAllot();
 }
 function setAllotmentQuotationUrl(a,d,bride,eventNo,url){
@@ -1779,7 +1805,7 @@ function rebuildAllotmentsFromServer(rows){
   rows.forEach(function(r){
     if(r.status!=='ALLOT')return;
     var parsed=parseAllotNote(r.note);
-    setAllotment(r.artist,r.date,parsed.bride,parsed.eventNo,r.note,r.quotationUrl||'');
+    setAllotment(r.artist,r.date,parsed.bride,parsed.eventNo,r.note,r.quotationUrl||'',r.quoteDataSig||'');
   });
 }
 function initials(n){if(!n)return'?';var p=n.trim().split(' ');return(p.length>1?p[0][0]+p[1][0]:n.slice(0,2)).toUpperCase();}
@@ -1961,12 +1987,13 @@ function runBackfillQuotations(){
     var lines='<div style="padding:12px;background:#EAF3DE;border-radius:10px;color:#27500A;font-size:13px;line-height:1.7">'
       +'<b>Done!</b> Checked '+r.processed+' form response'+(r.processed!==1?'s':'')+'<br>'
       +'✅ '+r.updated+' new quotation'+(r.updated!==1?'s':'')+' generated<br>'
+      +(r.sigBackfilled?'🔗 '+r.sigBackfilled+' older quotation'+(r.sigBackfilled!==1?'s':'')+' recognized as already filled (View PDF restored, nothing regenerated)<br>':'')
       +'⏭️ '+r.skipped+' already had a quotation (skipped)<br>'
       +(r.noMatch?'❓ '+r.noMatch+' had no matching allotment found<br>':'')
       +(r.errors&&r.errors.length?'⚠️ '+r.errors.length+' error'+(r.errors.length!==1?'s':'')+' — check Apps Script logs<br>':'')
       +'</div>';
     status.innerHTML=lines;
-    if(r.updated>0){toast(r.updated+' quotation(s) generated — refreshing…');autoSyncOnLoad();}
+    if(r.updated>0||r.sigBackfilled>0){toast((r.updated+r.sigBackfilled)+' quotation(s) updated — refreshing…');autoSyncOnLoad();}
   }).catch(function(err){
     btn.disabled=false;
     btn.textContent='🔄 Generate missing quotations now';
@@ -2413,8 +2440,8 @@ var ALLOT_FORM_LINKS={
 // eventNoLabel matching added earlier) — without this, same-day multi-event
 // bookings can't be disambiguated automatically at all.
 var FORM_FIELD_IDS={
-  MA:{eventDate:'entry.1549670694', artistName:'entry.1339200122', clientName:'entry.1960109089', location:'entry.381615111', eventNo:''},
-  HA:{eventDate:'entry.1560351672', artistName:'entry.2057952068', clientName:'entry.1039900537', location:'entry.2103359931', eventNo:''}
+  MA:{eventDate:'entry.1549670694', artistName:'entry.1339200122', clientName:'entry.1960109089', location:'entry.381615111', eventNo:'entry.1502871581'},
+  HA:{eventDate:'entry.1560351672', artistName:'entry.2057952068', clientName:'entry.1039900537', location:'entry.2103359931', eventNo:'entry.610014935'}
 };
 function buildPrefillUrl(role, artist, bride, eventDate, location, eventNo){
   var base=ALLOT_FORM_LINKS[role];
@@ -2564,6 +2591,7 @@ function refreshQuotation(role, artist, bride, ds, location, oldUrl){
 // Artist) booking would show Makeup fields instead of Saree Draping,
 // Dupatta Draping, Accessories, and Hair Extensions. Now it's built per
 // role so HA bookings get HA fields and MA bookings get MA fields.
+var QFILL_TRAVEL_OPTIONS=['Included','Not Included','Uber','Flight','Train','Paid by Us','Paid by Client'];
 var QFILL_COMMON_FIELDS=[
   {key:'siderCount',     label:'No. of Sider/Bride/Groom'},
   {key:'eventCount',     label:'No. of Events'},
@@ -2571,17 +2599,17 @@ var QFILL_COMMON_FIELDS=[
   {key:'totalPayable',   label:'Total Payable Charges'}
 ];
 var QFILL_HA_ONLY_FIELDS=[
-  {key:'sareeDraping',   label:'Saree Draping'},
-  {key:'dupattaDraping', label:'Dupatta Draping'},
-  {key:'accessories',    label:'Accessories (Small)'},
-  {key:'hairExtensions', label:'Hair Extensions'}
+  {key:'sareeDraping',   label:'Saree Draping',     options:['Included','Not Included']},
+  {key:'dupattaDraping', label:'Dupatta Draping',   options:['Included','Not Included']},
+  {key:'accessories',    label:'Accessories (Small)', options:['Included','Not Included']},
+  {key:'hairExtensions', label:'Hair Extensions',   options:['Real','Mixed','Not Included']}
 ];
 var QFILL_MA_ONLY_FIELDS=[
-  {key:'lashes',         label:'Lashes'},
-  {key:'lenses',         label:'Lenses'}
+  {key:'lashes',         label:'Lashes', options:['Included','Not Included','Pay 150 Extra']},
+  {key:'lenses',         label:'Lenses', options:['Included','Not Included','Pay 150 Extra']}
 ];
 var QFILL_TAIL_FIELDS=[
-  {key:'travel',         label:'Travel'},
+  {key:'travel',         label:'Travel', options:QFILL_TRAVEL_OPTIONS},
   {key:'paymentType',    label:'Payment Type'},
   {key:'additionalInfo', label:'Additional Information'}
 ];
@@ -2598,10 +2626,17 @@ function openQuotationFillModal(artist, ds, bride, eventNo, note, existingUrl){
   document.getElementById('qfill-sub').textContent=artist+' — '+role+(bride?' — '+bride:'')+(eventNo?' ('+eventNo+')':'');
   var draft=quotationDrafts[draftKey(artist,ds,bride,eventNo)]||{};
   document.getElementById('qfill-fields').innerHTML=getQfillFields(role).map(function(f){
-    var val=esc(draft[f.key]||'');
-    return '<div><div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">'+f.label+'</div>'
-      +'<input id="qf-'+f.key+'" type="text" value="'+val+'" style="width:100%;height:38px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 10px;font-size:13px;font-family:inherit">'
-      +'</div>';
+    var val=draft[f.key]||'';
+    var control;
+    if(f.options){
+      control='<select id="qf-'+f.key+'" style="width:100%;height:38px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 8px;font-size:13px;font-family:inherit;background:#fff">'
+        +'<option value=""'+(val?'':' selected')+'>— Select —</option>'
+        +f.options.map(function(o){return '<option value="'+esc(o)+'"'+(val===o?' selected':'')+'>'+esc(o)+'</option>';}).join('')
+        +'</select>';
+    } else {
+      control='<input id="qf-'+f.key+'" type="text" value="'+esc(val)+'" style="width:100%;height:38px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 10px;font-size:13px;font-family:inherit">';
+    }
+    return '<div><div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">'+f.label+'</div>'+control+'</div>';
   }).join('');
   document.getElementById('qfill-result').innerHTML='';
   document.getElementById('qfill-draft-status').textContent=Object.keys(draft).length?'📝 Resuming a saved draft — pick up where you left off':'';
@@ -3084,7 +3119,7 @@ function renderBookingBlock(b, ds){
     var roleMatch=parsed.roleText.match(/\b(MA|HA|DR|AST|CC)\b/);
     var role=roleMatch?roleMatch[1]:'';
     var extra=role?parsed.roleText.slice(parsed.roleText.indexOf(role)+role.length).replace(/^[\s—-]+/,'').trim():parsed.roleText;
-    var entry={artist:a.artist, quotationUrl:a.quotationUrl, extra:extra, note:a.note};
+    var entry={artist:a.artist, quotationUrl:a.quotationUrl, quoteDataSig:a.quoteDataSig, extra:extra, note:a.note};
     if(role==='MA'||role==='HA')roleMap[role]=entry;
     else otherRoles.push({role:role||'?', entry:entry});
   });
@@ -3100,12 +3135,23 @@ function renderBookingBlock(b, ds){
     var brideEsc=b.bride.replace(/'/g,"\\'");
     var eventNoEsc=b.eventNo.replace(/'/g,"\\'");
     var noteEsc=(e.note||'').replace(/'/g,"\\'");
-    if(e.quotationUrl){
+    // Known exception: Shubham's Priya Hadawale bookings on the 17th and
+    // 18th had a quotation URL saved before the form was actually filled,
+    // so the plain "URL exists → View PDF" rule below would show a stale
+    // "View PDF" for them. For just these, use the stricter check (URL AND
+    // confirmed real form data) — so it shows Fill Quotation now, and
+    // automatically flips back to View PDF on its own once Shubham submits
+    // the form and the next backfill run picks it up. Every other
+    // artist/booking keeps using the plain rule, untouched.
+    var isPriyaShubham1718 = /shubham/i.test(e.artist) && /priya\s*hadawale/i.test(b.bride) && /^(17|18)$/.test(String(ds).slice(-2).replace(/^0/,''));
+    var hasRealQuote = isPriyaShubham1718 ? (e.quotationUrl && e.quoteDataSig) : e.quotationUrl;
+    if(hasRealQuote){
       return ' <a href="'+e.quotationUrl+'" target="_blank" rel="noopener" style="font-size:11px;font-weight:700;color:#fff;background:#0F9B8E;text-decoration:none;border-radius:5px;padding:2px 8px;margin-left:6px">✅ View PDF</a>'
         +' <a href="javascript:void(0)" onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+noteEsc+'\',\''+e.quotationUrl+'\')" style="font-size:10.5px;font-weight:700;color:#888;margin-left:6px">✏️ Edit</a>'
         +' <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artistEsc+'\',\''+role+'\',\''+brideEsc+'\',\''+e.quotationUrl+'\')" style="font-size:10.5px;font-weight:700;color:#A3365A;margin-left:6px">📧 Send</a>';
     }
-    return ' <button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+noteEsc+'\',\'\')" style="margin-left:6px;height:22px;padding:0 8px;border-radius:5px;background:#0F9B8E;color:#fff;border:none;font-size:10.5px;font-weight:700;cursor:pointer">📄 Fill Quotation</button>';
+    var placeholderLink = e.quotationUrl ? ' <a href="'+e.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;color:#bbb;margin-left:6px">(placeholder)</a>' : '';
+    return ' <button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+noteEsc+'\',\'\')" style="margin-left:6px;height:22px;padding:0 8px;border-radius:5px;background:#0F9B8E;color:#fff;border:none;font-size:10.5px;font-weight:700;cursor:pointer">📄 Fill Quotation</button>'+placeholderLink;
   }
 
   function roleLine(role){
@@ -3130,7 +3176,7 @@ function renderBookingBlock(b, ds){
       var roleLetter=roleM?roleM[1]:'';
       var m=String(a.note||'').match(/Siders\s*\((\d+)\)\s*:?\s*(.*)$/i);
       if(m && !sInfo)sInfo={count:m[1], names:(m[2]||'').trim()};
-      var entry={artist:a.artist, quotationUrl:a.quotationUrl, note:a.note};
+      var entry={artist:a.artist, quotationUrl:a.quotationUrl, quoteDataSig:a.quoteDataSig, note:a.note};
       if(roleLetter==='MA')sMA=entry;
       else if(roleLetter==='HA')sHA=entry;
     });
@@ -3139,12 +3185,15 @@ function renderBookingBlock(b, ds){
       var artistEsc=entry.artist.replace(/'/g,"\\'");
       var noteEsc=(entry.note||'').replace(/'/g,"\\'");
       var actions;
-      if(entry.quotationUrl){
+      var isPriyaShubham1718 = /shubham/i.test(entry.artist) && /priya\s*hadawale/i.test(b.bride) && /^(17|18)$/.test(String(ds).slice(-2).replace(/^0/,''));
+      var hasRealQuote = isPriyaShubham1718 ? (entry.quotationUrl && entry.quoteDataSig) : entry.quotationUrl;
+      if(hasRealQuote){
         actions='<a href="'+entry.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;font-weight:700;color:#0F9B8E">✅ View</a>'
           +' · <a href="javascript:void(0)" onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\',\''+noteEsc+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#888">✏️ Edit</a>'
           +' · <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artistEsc+'\',\''+roleLbl+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#A3365A">📧 Send</a>';
       } else {
-        actions='<button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\',\''+noteEsc+'\',\'\')" style="font-size:10px;font-weight:700;color:#fff;background:#0F9B8E;border:none;border-radius:5px;padding:2px 8px;cursor:pointer">📄 Fill Quotation</button>';
+        actions='<button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\',\''+noteEsc+'\',\'\')" style="font-size:10px;font-weight:700;color:#fff;background:#0F9B8E;border:none;border-radius:5px;padding:2px 8px;cursor:pointer">📄 Fill Quotation</button>'
+          +(entry.quotationUrl?' <a href="'+entry.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;color:#bbb">(placeholder)</a>':'');
       }
       return '<div style="font-size:12.5px;margin-bottom:4px"><b>'+roleLbl+':</b> '+esc(entry.artist)+'<br><span style="margin-left:1px">'+actions+'</span></div>';
     }

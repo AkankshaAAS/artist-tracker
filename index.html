@@ -542,6 +542,24 @@ function parseAllotNoteServer(note) {
   return { bride: '', eventNo: '' };
 }
 
+// Compares an eventKey ("Bride — EventNo", built client-side) against a row's
+// note using loose bride matching + normalized eventNo — instead of requiring
+// the note to literally START WITH the exact eventKey string. An exact
+// character-for-character prefix check silently fails to match whenever the
+// bride name drifts even slightly (extra space, different capitalization,
+// re-synced Sales Sheet text) — and because upsert/delete calls are fired
+// with mode:'no-cors', the app can't see that failure either. When upsert's
+// match silently fails, it doesn't error — it appends a brand new duplicate
+// row instead of updating the existing one, quietly splitting the data.
+function eventKeyMatchesNote(eventKey, note) {
+  if (!eventKey) return false;
+  var ek = parseAllotNoteServer(eventKey);
+  var rn = parseAllotNoteServer(note);
+  if (!ek.bride || !rn.bride) return false;
+  if (!namesLooselyMatch(ek.bride, rn.bride)) return false;
+  return ek.eventNo.trim().toLowerCase() === rn.eventNo.trim().toLowerCase();
+}
+
 function findFormResponse(role, artistName, clientName, eventDateStr) {
   var sheetId = role === 'HA' ? HA_RESPONSE_SHEET_ID : MA_RESPONSE_SHEET_ID;
   var tabName = role === 'HA' ? HA_RESPONSE_TAB : MA_RESPONSE_TAB;
@@ -599,21 +617,21 @@ function getOrCreateQuotationsFolder() {
   return DriveApp.createFolder('Artist Quotations');
 }
 
-function buildQuotationPdfBlob(d) {
-  var roleLabels = {MA:'Makeup Artist', HA:'Hair Artist', DR:'Drappist', AST:'Assistant', CC:'Content Creator'};
-  var roleLabel = roleLabels[d.role] || d.role;
-  var fr  = d.formResponse || {}; // real data read from the artist's submitted MA/HA form
-  var man = d.manual || {};       // anything staff typed manually into the Fill Quotation modal
-
-  // Manual entry wins field-by-field over the form response, so a manual
-  // correction always sticks — but if a field is left blank manually, the
-  // real form submission (if any) is used automatically.
+// Manual entry (typed by staff in the Fill Quotation modal) wins
+// field-by-field over the real form response — but if a field is left
+// blank manually, the real form submission (if any) is used automatically.
+// Shared by buildQuotationPdfBlob (what goes ON the PDF) and the
+// QuoteDataSig calculation (whether the PDF counts as "actually filled" —
+// see the 'quotation'/'refreshQuotation' handler below), so both always
+// agree on what counts as real content.
+function mergeQuotationFields(fr, man) {
+  fr = fr || {}; man = man || {};
   function pick(key) {
     var m = man[key];
     if (m !== undefined &amp;&amp; m !== null &amp;&amp; String(m).trim() !== '') return String(m).trim();
     return fr[key] || '';
   }
-  var merged = {
+  return {
     serviceFor:     pick('serviceFor'),
     siderCount:     pick('siderCount'),
     eventCount:     pick('eventCount'),
@@ -629,6 +647,15 @@ function buildQuotationPdfBlob(d) {
     paymentType:    pick('paymentType'),
     additionalInfo: pick('additionalInfo')
   };
+}
+
+function buildQuotationPdfBlob(d) {
+  var roleLabels = {MA:'Makeup Artist', HA:'Hair Artist', DR:'Drappist', AST:'Assistant', CC:'Content Creator'};
+  var roleLabel = roleLabels[d.role] || d.role;
+  var fr  = d.formResponse || {}; // real data read from the artist's submitted MA/HA form
+  var man = d.manual || {};       // anything staff typed manually into the Fill Quotation modal
+
+  var merged = mergeQuotationFields(fr, man);
   var hasAny = Object.keys(merged).some(function(k){ return !!merged[k]; });
 
   var extraHtml = '';
@@ -1243,6 +1270,7 @@ function doGet(e) {
         eventNo:   e.parameter.eventNo || '',
         eventName: e.parameter.eventName || '',
         date:      e.parameter.date || '',
+        dateIso:   e.parameter.dateIso || '',   // yyyy-MM-dd — used ONLY for matching the sheet row, never shown on the PDF
         location:  e.parameter.location || '',
         readyTime: e.parameter.readyTime || ''
       };
@@ -1305,21 +1333,53 @@ function doGet(e) {
       // matches on artist + date + bride/eventNo prefix, same as doPost's
       // upsert matcher. Without this, the next autoBackfillQuotations run
       // would see an empty sig and regenerate this same PDF again once more.
+      //
+      // Sig is computed from the SAME merged (manual + real form) fields
+      // that actually went onto the PDF — not just the real form response —
+      // so a quotation that Simran filled in by hand (no artist form yet)
+      // still counts as "really filled" and shows View PDF, while a bare
+      // auto-generated placeholder (both manual and form empty, e.g. right
+      // after allotment) keeps sig blank and correctly still shows Fill
+      // Quotation.
+      var sigVal = '';
       try {
-        var sigVal = hashFormResponse(qData.formResponse);
+        sigVal = hashFormResponse(mergeQuotationFields(qData.formResponse, qData.manual));
         var avSheet = ss2.getSheetByName(AVAIL_SHEET);
         var avData = avSheet.getDataRange().getValues();
-        var evKey = (qData.bride || '') + ' — ' + (qData.eventNo || '');
+        // Find the matching row by parsing each row's own note (bride +
+        // eventNo) and comparing loosely — same approach used everywhere
+        // else in this file (namesLooselyMatch / eventNo trim+lowercase)
+        // instead of requiring the note to start with an exact,
+        // character-for-character "bride — eventNo" string. An exact-prefix
+        // check silently finds nothing (no error, just no match) whenever
+        // the bride/eventNo text drifts even slightly between when the
+        // artist was allotted and when the quotation is filled — e.g. an
+        // extra space, different capitalization, or the Sales Sheet's bride
+        // name being re-synced — which is exactly what let the freshly
+        // computed sig here return correctly to the browser (so View PDF
+        // showed immediately) while silently never getting saved to the
+        // sheet, so the next sync/refresh pulled the still-blank value back
+        // and reverted the card to Fill Quotation.
+        var qEventKey = (qData.bride || '') + ' — ' + (qData.eventNo || '');
+        // Match on dateIso (yyyy-MM-dd), NOT qData.date — qData.date is
+        // DD/MM/YYYY (built for the Google Form prefill / PDF display) and
+        // normDate() always returns yyyy-MM-dd, so comparing against
+        // qData.date here silently matched nothing on every single call —
+        // the sig was computed and shown in the browser but never actually
+        // saved to the sheet, so the next sync always reverted the card
+        // back to "Fill Quotation". dateIso falls back to qData.date for
+        // any old cached page that hasn't picked up the dateIso param yet.
+        var matchDate = qData.dateIso || qData.date;
         for (var si = 1; si &lt; avData.length; si++) {
-          if (String(avData[si][0]) !== qData.artist) continue;
-          if (normDate(avData[si][1]) !== qData.date) continue;
-          if (String(avData[si][3] || '').indexOf(evKey) !== 0) continue;
+          if (String(avData[si][0]).trim().toLowerCase() !== String(qData.artist).trim().toLowerCase()) continue;
+          if (normDate(avData[si][1]) !== matchDate) continue;
+          if (!eventKeyMatchesNote(qEventKey, avData[si][3])) continue;
           avSheet.getRange(si + 1, 8).setValue(sigVal);
           break;
         }
       } catch(exSig) { Logger.log('sig persist: ' + exSig); }
 
-      return jsonOut(e, { ok: true, url: url, emailed: emailed, email: email || '', foundResponse: !!qData.formResponse });
+      return jsonOut(e, { ok: true, url: url, emailed: emailed, email: email || '', foundResponse: !!qData.formResponse, sig: sigVal });
     } catch(err) {
       return jsonOut(e, { ok: false, error: String(err) });
     }
@@ -1484,10 +1544,10 @@ function doPost(e) {
         if (String(data[i][0]) !== payload.artist) continue;
         if (normDate(data[i][1]) !== payload.date) continue;
         if (payload.status === 'ALLOT') {
-          // ALLOT rows: match on the SAME event (bride+eventNo prefix) so a
-          // second allotment for a different event on the same day doesn't
+          // ALLOT rows: match on the SAME event (bride+eventNo) so a second
+          // allotment for a different event on the same day doesn't
           // overwrite the first — it gets its own row instead.
-          if (payload.eventKey &amp;&amp; String(data[i][3] || '').indexOf(payload.eventKey) === 0) {
+          if (eventKeyMatchesNote(payload.eventKey, data[i][3])) {
             matchIdx = i; break;
           }
         } else {
@@ -1509,7 +1569,7 @@ function doPost(e) {
         if (normDate(data[k][1]) !== payload.date) continue;
         if (payload.eventKey) {
           // Deleting one specific allotment
-          if (String(data[k][3] || '').indexOf(payload.eventKey) === 0) {
+          if (eventKeyMatchesNote(payload.eventKey, data[k][3])) {
             availSheet.deleteRow(k + 1);
             break;
           }
@@ -1652,22 +1712,7 @@ function doPost(e) {
   </div>
 </div>
 
-<!-- QUOTATION FILL MODAL — Simran fills the quotation details herself,
-     generates the PDF, then decides when to email it to the artist -->
-<div id="qfill-modal-wrap" style="display:none;position:fixed;inset:0;background:rgba(40,10,20,0.45);z-index:9999;align-items:center;justify-content:center;padding:16px">
-  <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;max-height:88vh;overflow:auto;padding:20px">
-    <div style="font-size:15px;font-weight:800;color:#222;margin-bottom:2px">Fill Quotation Details</div>
-    <div style="font-size:12px;color:#888;margin-bottom:14px" id="qfill-sub"></div>
-    <div id="qfill-fields" style="display:flex;flex-direction:column;gap:10px"></div>
-    <div id="qfill-result" style="margin-top:12px"></div>
-    <div id="qfill-draft-status" style="font-size:11px;color:#999;margin-top:8px;text-align:center"></div>
-    <div style="display:flex;gap:8px;margin-top:14px">
-      <button onclick="saveQuotationDraft()" style="height:46px;padding:0 16px;border-radius:11px;background:#F8F7F8;color:#0F9B8E;border:1.5px solid #0F9B8E;font-size:13px;font-weight:700;cursor:pointer">💾 Save Draft</button>
-      <button onclick="submitQuotationFill()" id="qfill-submit-btn" style="flex:1;height:46px;border-radius:11px;background:#0F9B8E;color:#fff;border:none;font-size:14px;font-weight:800;cursor:pointer">Generate PDF</button>
-      <button onclick="closeQuotationFillModal()" style="height:46px;padding:0 14px;border-radius:11px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:13px;font-weight:700;cursor:pointer">Close</button>
-    </div>
-  </div>
-</div>
+
 
 <!-- SYNC STATUS OVERLAY -->
 <div id="sync-overlay" class="sync-overlay">
@@ -1789,9 +1834,16 @@ function setAllotment(a,d,bride,eventNo,note,quotationUrl,quoteDataSig){
   allotments[key]={artist:a,date:d,bride:bride||'',eventNo:eventNo||'',note:note,quotationUrl:existingUrl||'',quoteDataSig:existingSig||''};
   saveAllot();
 }
-function setAllotmentQuotationUrl(a,d,bride,eventNo,url){
+function setAllotmentQuotationUrl(a,d,bride,eventNo,url,sig){
   var key=allotKey(a,d,bride,eventNo);
-  if(allotments[key]){allotments[key].quotationUrl=url;saveAllot();}
+  if(allotments[key]){
+    allotments[key].quotationUrl=url;
+    // Only overwrite the local sig when the caller actually has a fresh one
+    // (server just told us) — otherwise leave whatever was there so we don't
+    // accidentally blank out a real sig we already knew about.
+    if(sig!==undefined)allotments[key].quoteDataSig=sig;
+    saveAllot();
+  }
 }
 function removeAllotment(a,d,bride,eventNo){
   delete allotments[allotKey(a,d,bride,eventNo)];
@@ -2385,11 +2437,16 @@ function renderCurrentAllotments(artist,ds,myAllots){
       var roleMatch=parsed.roleText.match(/\b(MA|HA|DR|AST|CC|SIDERS)\b/);
       var role=roleMatch?roleMatch[1]:'';
       var roleColor=ROLE_BADGE_COLORS[role]||'#8E63D2';
-      var quoteLink=al.quotationUrl
+      var hasRealQuote = al.quotationUrl && al.quoteDataSig;
+      var booking=getBookingsForDate(ds).find(function(b){return b.bride===(al.bride||'') && b.eventNo===(al.eventNo||'');});
+      var locEsc=(booking&&booking.location?booking.location:'').replace(/'/g,"\\'");
+      var formLink=buildPrefillUrl(role||'MA', artist, al.bride||'', formatDateForForm(ds), booking?booking.location:'', al.eventNo||'') || ALLOT_FORM_LINKS[role||'MA'] || '';
+      var quoteLink=hasRealQuote
         ?'<a href="'+al.quotationUrl+'" target="_blank" rel="noopener" style="display:inline-block;margin-top:4px;font-size:10px;font-weight:700;color:#0F9B8E">✅ View Quotation</a>'
-          +' · <a href="javascript:void(0)" onclick="openQuotationFillModal(\''+artist.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\',\''+(al.note||'').replace(/'/g,"\\'")+'\',\''+al.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#888">✏️ Edit</a>'
+          +' · <a href="javascript:void(0)" onclick="refreshQuotation(\''+(role||'MA')+'\',\''+artist.replace(/'/g,"\\'")+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\',\''+ds+'\',\''+locEsc+'\',\''+al.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#888">🔄 Refresh</a>'
           +' · <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artist.replace(/'/g,"\\'")+'\',\''+(role||'MA')+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+al.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#A3365A">📧 Send</a>'
-        :'<button onclick="openQuotationFillModal(\''+artist.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\',\''+(al.note||'').replace(/'/g,"\\'")+'\',\'\')" style="display:block;margin-top:5px;height:26px;padding:0 10px;border-radius:6px;background:#0F9B8E;color:#fff;border:none;font-size:10.5px;font-weight:700;cursor:pointer">📄 Fill Quotation</button>';
+        :(formLink?'<a href="'+formLink+'" target="_blank" rel="noopener" style="display:inline-block;margin-top:5px;height:26px;line-height:26px;padding:0 10px;border-radius:6px;background:#0F9B8E;color:#fff;font-size:10.5px;font-weight:700;text-decoration:none">📝 Fill '+(role||'MA')+' Form</a>':'')
+          +' <a href="javascript:void(0)" onclick="refreshQuotation(\''+(role||'MA')+'\',\''+artist.replace(/'/g,"\\'")+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\',\''+ds+'\',\''+locEsc+'\',\''+(al.quotationUrl||'')+'\')" style="font-size:10px;font-weight:700;color:#0F9B8E">🔄 Check</a>';
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:'+roleColor+'14;border:1.5px solid '+roleColor+'44;border-radius:9px;padding:7px 10px;margin-bottom:6px">'
         +'<div style="flex:1"><div style="font-size:11.5px;color:#333;font-weight:600;line-height:1.4">'+esc(al.note)+'</div>'+quoteLink+'</div>'
         +'<button onclick="removeOneAllotment(\''+artist.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\')" style="flex-shrink:0;width:22px;height:22px;border-radius:6px;background:#fff;border:1.5px solid '+roleColor+'55;color:'+roleColor+';font-size:12px;font-weight:800;cursor:pointer;line-height:1">✕</button>'
@@ -2548,10 +2605,13 @@ function showAllotFormLink(role){
   sendQuotationToServer(role, artist, bride, eventNo, eventName, activeDate, location, readyTime);
 }
 
-function refreshQuotation(role, artist, bride, ds, location, oldUrl){
+function refreshQuotation(role, artist, bride, eventNo, ds, location, oldUrl){
   if(!gasUrl)return;
-  var booking=getBookingsForDate(ds).find(function(b){return b.bride===bride;});
-  var eventNo=booking?booking.eventNo:'', eventName=booking?booking.eventName:'', readyTime=booking?booking.readyTime:'';
+  // Match on bride AND eventNo (not bride alone) — a bride with several
+  // events on the same day would otherwise always resolve to whichever one
+  // happens to come first in the bookings list.
+  var booking=getBookingsForDate(ds).find(function(b){return b.bride===bride && b.eventNo===eventNo;});
+  var eventName=booking?booking.eventName:'', readyTime=booking?booking.readyTime:'';
   toast('Checking for form response…');
   var qs='action=refreshQuotation'
     +'&artist='+encodeURIComponent(artist)
@@ -2560,12 +2620,13 @@ function refreshQuotation(role, artist, bride, ds, location, oldUrl){
     +'&eventNo='+encodeURIComponent(eventNo||'')
     +'&eventName='+encodeURIComponent(eventName||'')
     +'&date='+encodeURIComponent(formatDateForForm(ds))
+    +'&dateIso='+encodeURIComponent(ds)
     +'&location='+encodeURIComponent(location||'')
     +'&readyTime='+encodeURIComponent(readyTime||'')
     +'&oldUrl='+encodeURIComponent(oldUrl||'');
   reliableGet(gasUrl+'?'+qs).then(function(data){
     if(!data.ok){toast('Refresh failed: '+(data.error||'unknown'));return;}
-    setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url);
+    setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url, data.sig);
     var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
     if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:(bride||'')+' — '+(eventNo||''),quotationUrl:data.url})});
     renderCal();updateSidebar();refreshOpenPanels(artist);
@@ -2577,161 +2638,6 @@ function refreshQuotation(role, artist, bride, ds, location, oldUrl){
   }).catch(function(err){
     toast('Refresh failed — check connection');
     console.warn('refreshQuotation failed',err);
-  });
-}
-
-// ── In-app quotation fill workflow ──────────────────
-// Lets Simran type in the quotation details herself (Charges, Lashes,
-// Lenses, Travel, Payment Type, etc.) instead of relying on the artist's
-// external Google Form. Generates the PDF first; emailing is a separate,
-// explicit step so she can check it before it goes out.
-//
-// IMPORTANT: field set depends on role. Previously this was one fixed array
-// (with Lashes/Lenses baked in) used for EVERY role — so an HA (Hair
-// Artist) booking would show Makeup fields instead of Saree Draping,
-// Dupatta Draping, Accessories, and Hair Extensions. Now it's built per
-// role so HA bookings get HA fields and MA bookings get MA fields.
-var QFILL_TRAVEL_OPTIONS=['Included','Not Included','Uber','Flight','Train','Paid by Us','Paid by Client'];
-var QFILL_COMMON_FIELDS=[
-  {key:'siderCount',     label:'No. of Sider/Bride/Groom'},
-  {key:'eventCount',     label:'No. of Events'},
-  {key:'chargesPerLook', label:'Charges Approved per Look'},
-  {key:'totalPayable',   label:'Total Payable Charges'}
-];
-var QFILL_HA_ONLY_FIELDS=[
-  {key:'sareeDraping',   label:'Saree Draping',     options:['Included','Not Included']},
-  {key:'dupattaDraping', label:'Dupatta Draping',   options:['Included','Not Included']},
-  {key:'accessories',    label:'Accessories (Small)', options:['Included','Not Included']},
-  {key:'hairExtensions', label:'Hair Extensions',   options:['Real','Mixed','Not Included']}
-];
-var QFILL_MA_ONLY_FIELDS=[
-  {key:'lashes',         label:'Lashes', options:['Included','Not Included','Pay 150 Extra']},
-  {key:'lenses',         label:'Lenses', options:['Included','Not Included','Pay 150 Extra']}
-];
-var QFILL_TAIL_FIELDS=[
-  {key:'travel',         label:'Travel', options:QFILL_TRAVEL_OPTIONS},
-  {key:'paymentType',    label:'Payment Type'},
-  {key:'additionalInfo', label:'Additional Information'}
-];
-function getQfillFields(role){
-  var forLabel=role==='HA'?'Hairstyle For (bride/groom/sider name)':'Makeup/Hairstyle For (bride/groom/sider name)';
-  var roleFields=role==='HA'?QFILL_HA_ONLY_FIELDS:QFILL_MA_ONLY_FIELDS;
-  return [{key:'serviceFor',label:forLabel}].concat(QFILL_COMMON_FIELDS, roleFields, QFILL_TAIL_FIELDS);
-}
-var qfillCtx=null;
-function openQuotationFillModal(artist, ds, bride, eventNo, note, existingUrl){
-  var roleMatch=(note||'').match(/\b(MA|HA|DR|AST|CC)\b/);
-  var role=roleMatch?roleMatch[1]:'MA';
-  qfillCtx={artist:artist, ds:ds, bride:bride, eventNo:eventNo, role:role, existingUrl:existingUrl||'', newUrl:''};
-  document.getElementById('qfill-sub').textContent=artist+' — '+role+(bride?' — '+bride:'')+(eventNo?' ('+eventNo+')':'');
-  var draft=quotationDrafts[draftKey(artist,ds,bride,eventNo)]||{};
-  document.getElementById('qfill-fields').innerHTML=getQfillFields(role).map(function(f){
-    var val=draft[f.key]||'';
-    var control;
-    if(f.options){
-      control='<select id="qf-'+f.key+'" style="width:100%;height:38px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 8px;font-size:13px;font-family:inherit;background:#fff">'
-        +'<option value=""'+(val?'':' selected')+'>— Select —</option>'
-        +f.options.map(function(o){return '<option value="'+esc(o)+'"'+(val===o?' selected':'')+'>'+esc(o)+'</option>';}).join('')
-        +'</select>';
-    } else {
-      control='<input id="qf-'+f.key+'" type="text" value="'+esc(val)+'" style="width:100%;height:38px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 10px;font-size:13px;font-family:inherit">';
-    }
-    return '<div><div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">'+f.label+'</div>'+control+'</div>';
-  }).join('');
-  document.getElementById('qfill-result').innerHTML='';
-  document.getElementById('qfill-draft-status').textContent=Object.keys(draft).length?'📝 Resuming a saved draft — pick up where you left off':'';
-  document.getElementById('qfill-submit-btn').disabled=false;
-  document.getElementById('qfill-submit-btn').textContent='Generate PDF';
-  document.getElementById('qfill-modal-wrap').style.display='flex';
-}
-function closeQuotationFillModal(){document.getElementById('qfill-modal-wrap').style.display='none';qfillCtx=null;}
-
-function collectQfillFields(){
-  var data={};
-  getQfillFields(qfillCtx?qfillCtx.role:'MA').forEach(function(f){
-    var el=document.getElementById('qf-'+f.key);
-    if(!el)return;
-    var v=el.value.trim();
-    if(v)data[f.key]=v;
-  });
-  return data;
-}
-
-// Saves whatever's currently typed WITHOUT generating a PDF or sending
-// anything — she can close the app and come back to this exact state later,
-// from any device, since it's written to the shared sheet.
-function saveQuotationDraft(){
-  if(!qfillCtx)return;
-  var data=collectQfillFields();
-  var key=draftKey(qfillCtx.artist,qfillCtx.ds,qfillCtx.bride,qfillCtx.eventNo);
-  quotationDrafts[key]=data;
-  saveDraftsLocal();
-  if(gasUrl){
-    fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({
-      action:'saveDraft', artist:qfillCtx.artist, date:qfillCtx.ds,
-      bride:qfillCtx.bride||'', eventNo:qfillCtx.eventNo||'', data:data
-    })});
-  }
-  document.getElementById('qfill-draft-status').textContent='💾 Draft saved — come back anytime to finish';
-  toast('Draft saved — you can resume this later');
-}
-
-function submitQuotationFill(){
-  if(!qfillCtx||!gasUrl){toast('Not connected — check Settings');return;}
-  var btn=document.getElementById('qfill-submit-btn');
-  btn.disabled=true;btn.textContent='Generating…';
-  var booking=getBookingsForDate(qfillCtx.ds).find(function(b){return b.bride===qfillCtx.bride && b.eventNo===qfillCtx.eventNo;});
-  var eventName=booking?booking.eventName:'', location=booking?booking.location:'', readyTime=booking?booking.readyTime:'';
-  var qs=(qfillCtx.existingUrl?'action=refreshQuotation':'action=quotation')
-    +'&artist='+encodeURIComponent(qfillCtx.artist)
-    +'&role='+encodeURIComponent(qfillCtx.role)
-    +'&bride='+encodeURIComponent(qfillCtx.bride||'')
-    +'&eventNo='+encodeURIComponent(qfillCtx.eventNo||'')
-    +'&eventName='+encodeURIComponent(eventName||'')
-    +'&date='+encodeURIComponent(formatDateForForm(qfillCtx.ds))
-    +'&location='+encodeURIComponent(location||'')
-    +'&readyTime='+encodeURIComponent(readyTime||'')
-    +'&noEmail=1'; // never auto-email from here — sending is a separate explicit step
-  if(qfillCtx.existingUrl)qs+='&oldUrl='+encodeURIComponent(qfillCtx.existingUrl);
-  var fieldData=collectQfillFields();
-  Object.keys(fieldData).forEach(function(k){qs+='&'+k+'='+encodeURIComponent(fieldData[k]);});
-  // Keep the draft in sync with whatever was just generated, so "Edit" later reopens with these exact values
-  var dkey=draftKey(qfillCtx.artist,qfillCtx.ds,qfillCtx.bride,qfillCtx.eventNo);
-  quotationDrafts[dkey]=fieldData;
-  saveDraftsLocal();
-  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'saveDraft',artist:qfillCtx.artist,date:qfillCtx.ds,bride:qfillCtx.bride||'',eventNo:qfillCtx.eventNo||'',data:fieldData})});
-  reliableGet(gasUrl+'?'+qs).then(function(data){
-    btn.disabled=false;btn.textContent='Generate PDF';
-    if(!data.ok){document.getElementById('qfill-result').innerHTML='<div style="color:#9B1A2F;font-size:12px;font-weight:600">Failed: '+esc(data.error||'unknown')+'</div>';return;}
-    setAllotmentQuotationUrl(qfillCtx.artist, qfillCtx.ds, qfillCtx.bride||'', qfillCtx.eventNo||'', data.url);
-    var existing=getAllotments(qfillCtx.artist,qfillCtx.ds).find(function(x){return x.bride===(qfillCtx.bride||'')&&x.eventNo===(qfillCtx.eventNo||'');});
-    if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:qfillCtx.artist,date:qfillCtx.ds,status:'ALLOT',note:existing.note,eventKey:(qfillCtx.bride||'')+' — '+(qfillCtx.eventNo||''),quotationUrl:data.url})});
-    qfillCtx.newUrl=data.url;
-    renderCal();updateSidebar();refreshOpenPanels(qfillCtx.artist);
-    document.getElementById('qfill-result').innerHTML='<div style="padding:10px;background:#EAF3DE;border-radius:10px;color:#27500A;font-size:12.5px;font-weight:600;margin-bottom:8px">✅ PDF generated — <a href="'+data.url+'" target="_blank" rel="noopener" style="color:#0F9B8E">View it here</a> before sending</div>'
-      +'<button onclick="emailQuotationToArtist()" style="height:44px;width:100%;border-radius:10px;background:#A3365A;color:#fff;border:none;font-size:13px;font-weight:800;cursor:pointer">📧 Send to '+esc(qfillCtx.artist)+' via Email</button>';
-  }).catch(function(err){
-    btn.disabled=false;btn.textContent='Generate PDF';
-    document.getElementById('qfill-result').innerHTML='<div style="color:#9B1A2F;font-size:12px;font-weight:600">Request failed — check connection</div>';
-    console.warn('quotation fill failed',err);
-  });
-}
-
-function emailQuotationToArtist(){
-  if(!qfillCtx||!qfillCtx.newUrl||!gasUrl)return;
-  var qs='action=emailQuotation'
-    +'&artist='+encodeURIComponent(qfillCtx.artist)
-    +'&role='+encodeURIComponent(qfillCtx.role)
-    +'&bride='+encodeURIComponent(qfillCtx.bride||'')
-    +'&url='+encodeURIComponent(qfillCtx.newUrl);
-  toast('Sending email...');
-  reliableGet(gasUrl+'?'+qs).then(function(data){
-    if(!data.ok){toast('Email failed: '+(data.error||'unknown'));return;}
-    toast('📧 Emailed to '+qfillCtx.artist+(data.email?' ('+data.email+')':''));
-    closeQuotationFillModal();
-  }).catch(function(err){
-    toast('Email request failed — check connection');
-    console.warn('emailQuotation failed',err);
   });
 }
 
@@ -2765,11 +2671,12 @@ function sendQuotationToServer(role, artist, bride, eventNo, eventName, ds, loca
     +'&eventNo='+encodeURIComponent(eventNo||'')
     +'&eventName='+encodeURIComponent(eventName||'')
     +'&date='+encodeURIComponent(formatDateForForm(ds))
+    +'&dateIso='+encodeURIComponent(ds)
     +'&location='+encodeURIComponent(location||'')
     +'&readyTime='+encodeURIComponent(readyTime||'');
   reliableGet(gasUrl+'?'+qs).then(function(data){
     if(!data.ok){console.warn('Quotation generation failed:',data.error);return;}
-    setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url);
+    setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url, data.sig);
     var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
     if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:(bride||'')+' — '+(eventNo||''),quotationUrl:data.url})});
     renderCal();updateSidebar();refreshOpenPanels(artist);
@@ -3135,23 +3042,25 @@ function renderBookingBlock(b, ds){
     var brideEsc=b.bride.replace(/'/g,"\\'");
     var eventNoEsc=b.eventNo.replace(/'/g,"\\'");
     var noteEsc=(e.note||'').replace(/'/g,"\\'");
-    // Known exception: Shubham's Priya Hadawale bookings on the 17th and
-    // 18th had a quotation URL saved before the form was actually filled,
-    // so the plain "URL exists → View PDF" rule below would show a stale
-    // "View PDF" for them. For just these, use the stricter check (URL AND
-    // confirmed real form data) — so it shows Fill Quotation now, and
-    // automatically flips back to View PDF on its own once Shubham submits
-    // the form and the next backfill run picks it up. Every other
-    // artist/booking keeps using the plain rule, untouched.
-    var isPriyaShubham1718 = /shubham/i.test(e.artist) && /priya\s*hadawale/i.test(b.bride) && /^(17|18)$/.test(String(ds).slice(-2).replace(/^0/,''));
-    var hasRealQuote = isPriyaShubham1718 ? (e.quotationUrl && e.quoteDataSig) : e.quotationUrl;
+    // A quotation URL alone isn't enough — one gets auto-generated in the
+    // background the moment an artist is allotted, before anyone has typed
+    // or submitted any real details, so it would always look "filled" even
+    // when it's just the bare placeholder. QuoteDataSig only gets set once
+    // there's real content (the artist's submitted MA/HA form, OR details
+    // Simran typed into Fill Quotation) — see mergeQuotationFields and the
+    // sig calc in the 'quotation' handler — so requiring both is what makes
+    // View PDF vs Fill Quotation actually reflect reality, for everyone.
+    var hasRealQuote = e.quotationUrl && e.quoteDataSig;
+    var formLink = buildPrefillUrl(role, e.artist, b.bride, formatDateForForm(ds), b.location, b.eventNo) || ALLOT_FORM_LINKS[role] || '';
     if(hasRealQuote){
       return ' <a href="'+e.quotationUrl+'" target="_blank" rel="noopener" style="font-size:11px;font-weight:700;color:#fff;background:#0F9B8E;text-decoration:none;border-radius:5px;padding:2px 8px;margin-left:6px">✅ View PDF</a>'
-        +' <a href="javascript:void(0)" onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+noteEsc+'\',\''+e.quotationUrl+'\')" style="font-size:10.5px;font-weight:700;color:#888;margin-left:6px">✏️ Edit</a>'
+        +' <a href="javascript:void(0)" onclick="refreshQuotation(\''+role+'\',\''+artistEsc+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+ds+'\',\''+(b.location||'').replace(/'/g,"\\'")+'\',\''+e.quotationUrl+'\')" style="font-size:10.5px;font-weight:700;color:#888;margin-left:6px">🔄 Refresh</a>'
         +' <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artistEsc+'\',\''+role+'\',\''+brideEsc+'\',\''+e.quotationUrl+'\')" style="font-size:10.5px;font-weight:700;color:#A3365A;margin-left:6px">📧 Send</a>';
     }
     var placeholderLink = e.quotationUrl ? ' <a href="'+e.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;color:#bbb;margin-left:6px">(placeholder)</a>' : '';
-    return ' <button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+noteEsc+'\',\'\')" style="margin-left:6px;height:22px;padding:0 8px;border-radius:5px;background:#0F9B8E;color:#fff;border:none;font-size:10.5px;font-weight:700;cursor:pointer">📄 Fill Quotation</button>'+placeholderLink;
+    return (formLink ? ' <a href="'+formLink+'" target="_blank" rel="noopener" style="margin-left:6px;height:22px;padding:2px 8px;border-radius:5px;background:#0F9B8E;color:#fff;font-size:10.5px;font-weight:700;text-decoration:none;display:inline-block">📝 Fill '+role+' Form</a>' : '')
+      +' <a href="javascript:void(0)" onclick="refreshQuotation(\''+role+'\',\''+artistEsc+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+ds+'\',\''+(b.location||'').replace(/'/g,"\\'")+'\',\''+(e.quotationUrl||'')+'\')" style="font-size:10.5px;font-weight:700;color:#0F9B8E;margin-left:6px">🔄 Check</a>'
+      +placeholderLink;
   }
 
   function roleLine(role){
@@ -3183,16 +3092,21 @@ function renderBookingBlock(b, ds){
     function sActionRow(entry,roleLbl){
       if(!entry)return '<div style="font-size:12px;color:#bbb;margin-bottom:3px">'+roleLbl+': —</div>';
       var artistEsc=entry.artist.replace(/'/g,"\\'");
-      var noteEsc=(entry.note||'').replace(/'/g,"\\'");
+      var brideEsc=b.bride.replace(/'/g,"\\'");
+      var eventNoEsc=b.eventNo.replace(/'/g,"\\'");
+      var locEsc=(b.location||'').replace(/'/g,"\\'");
       var actions;
-      var isPriyaShubham1718 = /shubham/i.test(entry.artist) && /priya\s*hadawale/i.test(b.bride) && /^(17|18)$/.test(String(ds).slice(-2).replace(/^0/,''));
-      var hasRealQuote = isPriyaShubham1718 ? (entry.quotationUrl && entry.quoteDataSig) : entry.quotationUrl;
+      // See quoteActions() above for why URL alone isn't enough — needs a
+      // real QuoteDataSig too (form response actually submitted).
+      var hasRealQuote = entry.quotationUrl && entry.quoteDataSig;
       if(hasRealQuote){
         actions='<a href="'+entry.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;font-weight:700;color:#0F9B8E">✅ View</a>'
-          +' · <a href="javascript:void(0)" onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\',\''+noteEsc+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#888">✏️ Edit</a>'
-          +' · <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artistEsc+'\',\''+roleLbl+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#A3365A">📧 Send</a>';
+          +' · <a href="javascript:void(0)" onclick="refreshQuotation(\''+roleLbl+'\',\''+artistEsc+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+ds+'\',\''+locEsc+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#888">🔄 Refresh</a>'
+          +' · <a href="javascript:void(0)" onclick="sendExistingQuotation(\''+artistEsc+'\',\''+roleLbl+'\',\''+brideEsc+'\',\''+entry.quotationUrl+'\')" style="font-size:10px;font-weight:700;color:#A3365A">📧 Send</a>';
       } else {
-        actions='<button onclick="openQuotationFillModal(\''+artistEsc+'\',\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\',\''+noteEsc+'\',\'\')" style="font-size:10px;font-weight:700;color:#fff;background:#0F9B8E;border:none;border-radius:5px;padding:2px 8px;cursor:pointer">📄 Fill Quotation</button>'
+        var sFormLink = buildPrefillUrl(roleLbl, entry.artist, b.bride, formatDateForForm(ds), b.location, b.eventNo) || ALLOT_FORM_LINKS[roleLbl] || '';
+        actions=(sFormLink?'<a href="'+sFormLink+'" target="_blank" rel="noopener" style="font-size:10px;font-weight:700;color:#fff;background:#0F9B8E;border-radius:5px;padding:2px 8px;text-decoration:none">📝 Fill '+roleLbl+' Form</a>':'')
+          +' · <a href="javascript:void(0)" onclick="refreshQuotation(\''+roleLbl+'\',\''+artistEsc+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+ds+'\',\''+locEsc+'\',\''+(entry.quotationUrl||'')+'\')" style="font-size:10px;font-weight:700;color:#0F9B8E">🔄 Check</a>'
           +(entry.quotationUrl?' <a href="'+entry.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;color:#bbb">(placeholder)</a>':'');
       }
       return '<div style="font-size:12.5px;margin-bottom:4px"><b>'+roleLbl+':</b> '+esc(entry.artist)+'<br><span style="margin-left:1px">'+actions+'</span></div>';

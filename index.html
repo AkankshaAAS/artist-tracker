@@ -1637,6 +1637,7 @@ function doPost(e) {
 
     <!-- ALLOT FLOW: bride selection -->
     <div id="allot-bride-section" style="display:none;margin-top:12px">
+      <div id="allot-existing-summary" style="margin-bottom:12px"></div>
       <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Select bride to allot</div>
       <div id="allot-bride-list" style="display:flex;flex-direction:column;gap:7px"></div>
       <button onclick="closeAllotFlow()" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
@@ -1646,6 +1647,7 @@ function doPost(e) {
     <div id="allot-role-section" style="display:none;margin-top:12px">
       <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Allotting for</div>
       <div id="allot-selected-bride" style="font-size:13px;font-weight:700;color:#A3365A;margin-bottom:10px"></div>
+      <div id="allot-existing-summary-role" style="margin-bottom:10px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button onclick="confirmAllot('MA')" style="height:48px;border-radius:12px;background:#A3365A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">MA</button>
         <button onclick="confirmAllot('HA')" style="height:48px;border-radius:12px;background:#6B3A8A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">HA</button>
@@ -1789,6 +1791,82 @@ function getSlot(a,d,slot){return slotAvail[skey(a,d,slot)]||null;}
 function setSlotBusy(a,d,slot){slotAvail[skey(a,d,slot)]='BUSY';saveSlots();}
 function clearSlotsForArtistDate(a,d){RT_SLOTS.forEach(function(s){delete slotAvail[skey(a,d,s)];});saveSlots();}
 function getBusySlots(a,d){return RT_SLOTS.filter(function(s){return getSlot(a,d,s)==='BUSY';});}
+
+// ── RT-based auto-blocking ─────────────────────────────
+// When an artist is allotted to an event, they're occupied for the ready-time
+// hour and the 3 hours before it (getting the client ready). e.g. RT 4 PM
+// blocks 1 PM, 2 PM, 3 PM, 4 PM. Those slots show BUSY so the artist isn't
+// offered as "free" for another event at a clashing time — but they stay free
+// for events outside that window.
+function slotLabelForHour24(h){
+  if(h<9)h=9; if(h>20)h=20;
+  if(h===12)return '12 PM';
+  if(h<12)return h+' AM';
+  return (h-12)+' PM';
+}
+// Map a ready-time string ("4 PM", "4:30pm", "sundowner", "afternoon"...) to an
+// index in RT_SLOTS. Returns -1 when it can't tell (then we don't guess).
+function rtToSlotIndex(rt){
+  if(rt===undefined||rt===null)return -1;
+  var s=String(rt).toLowerCase().trim();
+  if(!s)return -1;
+  var m=s.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m|p\.?m)\b/);
+  if(m){
+    var h=parseInt(m[1],10);
+    var min=m[2]?parseInt(m[2],10):0;
+    var ap=m[3].charAt(0);
+    if(ap==='p'&&h!==12)h+=12;
+    if(ap==='a'&&h===12)h=0;
+    if(min>=30)h+=1; // 4:30 rounds into the 5 PM slot
+    return RT_SLOTS.indexOf(slotLabelForHour24(h));
+  }
+  // Fuzzy words — rough windows so automation still works. Tweak here if your
+  // studio reads these differently.
+  if(/sundowner|sunset/.test(s))       return RT_SLOTS.indexOf('6 PM');
+  if(/after\s*noon|afternoon/.test(s)) return RT_SLOTS.indexOf('3 PM');
+  if(/evening/.test(s))                return RT_SLOTS.indexOf('6 PM');
+  if(/night/.test(s))                  return RT_SLOTS.indexOf('8 PM');
+  if(/morning/.test(s))                return RT_SLOTS.indexOf('10 AM');
+  if(/\bnoon\b|mid\s*day|midday/.test(s)) return RT_SLOTS.indexOf('12 PM');
+  return -1;
+}
+function rtWindowSlots(rt){
+  var idx=rtToSlotIndex(rt);
+  if(idx<0)return [];
+  var out=[]; for(var i=Math.max(0,idx-3);i<=idx;i++)out.push(RT_SLOTS[i]);
+  return out;
+}
+// Add an artist's RT window to their busy slots on a date (unions with
+// whatever is already there — so a 2nd event on the same day doesn't erase
+// the 1st, and manual edits survive). Returns the slots it blocked.
+function addRTBlockForArtist(a,d,rt){
+  var slots=rtWindowSlots(rt);
+  slots.forEach(function(s){setSlotBusy(a,d,s);});
+  return slots;
+}
+// Find the ready-time for the event a given allotment belongs to.
+function rtForAllotment(al){
+  var b=getBookingsForDate(al.date).find(function(x){return x.bride===al.bride && x.eventNo===al.eventNo;});
+  return b?b.readyTime:'';
+}
+// Retroactively block every allotted artist on a date whose slots haven't been
+// set yet — so allotments made before this feature (and after every sync) get
+// their RT window, WITHOUT clobbering anything Simran adjusted by hand (if an
+// artist already has any busy slots, we leave them alone).
+function autoBlockAllotmentsForDate(ds){
+  var byArtist={};
+  Object.keys(allotments).forEach(function(k){
+    var al=allotments[k];
+    if(al.date!==ds)return;
+    (byArtist[al.artist]=byArtist[al.artist]||[]).push(al);
+  });
+  Object.keys(byArtist).forEach(function(a){
+    if(getBusySlots(a,ds).length)return; // manual/earlier slots present — don't touch
+    var union={};
+    byArtist[a].forEach(function(al){ rtWindowSlots(rtForAllotment(al)).forEach(function(s){union[s]=1;}); });
+    Object.keys(union).forEach(function(s){setSlotBusy(a,ds,s);});
+  });
+}
 function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
 function sbar(m,tp){var b=document.getElementById('sbar');b.textContent=m;b.className='sbar show sy-'+tp;if(tp==='ok')setTimeout(()=>{b.className='sbar';},3000);}
 function akey(a,d){return a+'||'+d;}
@@ -2281,6 +2359,7 @@ function renderCatGroups(items, getName, renderChip){
 
 function showAvailExpand(ds, activeSlot) {
   lastAEDate = ds; lastAESlot = activeSlot || null;
+  autoBlockAllotmentsForDate(ds);
   var d = new Date(ds+'T00:00:00');
   var label = d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   document.getElementById('ae-date-label').textContent = label;
@@ -2295,7 +2374,16 @@ function showAvailExpand(ds, activeSlot) {
       var rec = getAv(a, ds);
       var slotBusy = getSlot(a, ds, activeSlot) === 'BUSY';
       var hasSpecificSlots = getBusySlots(a, ds).length > 0;
-      if (myAllots.length) { busy.push({name:a, status:'ALLOT'}); return; }
+      if (myAllots.length) {
+        // Allotted: if we know their RT window (they have busy slots), they're
+        // busy ONLY inside it — free to take another event at other times.
+        // If RT couldn't be read (no slots), fall back to busy all day.
+        if (hasSpecificSlots) {
+          if (slotBusy) { busy.push({name:a, status:'ALLOT'}); return; }
+          notMarked.push(a); return;
+        }
+        busy.push({name:a, status:'ALLOT'}); return;
+      }
       if (rec && rec.status==='LEAVE') { busy.push({name:a, status:rec.status}); return; }
       if (slotBusy) { busy.push({name:a, status:'BUSY'}); return; }
       if (rec && rec.status==='BUSY' && !hasSpecificSlots) { busy.push({name:a, status:'BUSY'}); return; }
@@ -2457,6 +2545,7 @@ function renderCurrentAllotments(artist,ds,myAllots){
 function removeOneAllotment(artist,ds,bride,eventNo){
   removeAllotment(artist,ds,bride,eventNo);
   if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist,date:ds,eventKey:bride+' — '+eventNo})});
+  if(!getAllotments(artist,ds).length) clearSlotsForArtistDate(artist,ds); // drop the auto RT-block once they're free again
   var myAllots=getAllotments(artist,ds);
   renderCurrentAllotments(artist,ds,myAllots);
   renderCal();updateSidebar();refreshOpenPanels(artist);
@@ -2534,7 +2623,41 @@ function setStatusFromModal(status){
   closeModal();renderCal();updateSidebar();refreshOpenPanels(artist);toast('Marked as '+status);
 }
 
+// Builds a read-only list of everything already allotted on a date, grouped by
+// bride/event, with each artist's role and siders shown separately — so nothing
+// recorded is invisible and it's obvious which entry belongs to which bride.
+function allotSummaryHtml(ds){
+  var all=Object.keys(allotments).map(function(k){return allotments[k];}).filter(function(a){return a.date===ds;});
+  if(!all.length)return '<div style="background:#F8F7F8;border:1.5px solid #ECECEC;border-radius:10px;padding:9px 11px;font-size:11px;color:#999">No artists allotted yet for this date.</div>';
+  var groups={},order=[];
+  all.forEach(function(a){var g=(a.bride||'General')+(a.eventNo?' — '+a.eventNo:'');if(!groups[g]){groups[g]=[];order.push(g);}groups[g].push(a);});
+  var rows=order.map(function(g){
+    var items=groups[g].map(function(a){
+      var p=parseAllotNote(a.note);
+      var isSider=/Siders\s*\(/i.test(p.roleText);
+      var role=(p.roleText.match(/\b(MA|HA|DR|AST|CC)\b/)||[])[1]||'?';
+      var nm='';
+      if(isSider){var m=String(a.note||'').match(/Siders\s*\(\d+\)\s*:?\s*(.*)$/i);nm=m?(m[1]||'').trim():'';}
+      return '<div style="font-size:11px;color:#444;margin:2px 0 0 6px">'
+        +(isSider?'<span style="color:#0F9B8E;font-weight:700">\uD83E\uDDF5 Sider</span> ':'')
+        +'<b>'+esc(role)+':</b> '+esc(a.artist)
+        +(isSider&&nm?' <span style="color:#888">('+esc(nm)+')</span>':'')
+        +'</div>';
+    }).join('');
+    return '<div style="margin-bottom:7px"><div style="font-size:11px;font-weight:800;color:#A3365A">'+esc(g)+'</div>'+items+'</div>';
+  }).join('');
+  return '<div style="background:#FFF6FA;border:1.5px solid #F4C0D1;border-radius:10px;padding:9px 11px">'
+    +'<div style="font-size:10px;font-weight:800;color:#A3365A;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Already allotted this date</div>'
+    +rows+'</div>';
+}
+function renderAllotDialogSummary(){
+  var h=allotSummaryHtml(activeDate);
+  var e1=document.getElementById('allot-existing-summary');if(e1)e1.innerHTML=h;
+  var e2=document.getElementById('allot-existing-summary-role');if(e2)e2.innerHTML=h;
+}
+
 function openAllotFlow(){
+  renderAllotDialogSummary();
   var brides=getBookingsForDate(activeDate);
   if(!brides.length){
     // No bride bookings on this date — just allot directly to MA/HA
@@ -2557,6 +2680,7 @@ function selectAllotBride(idx){
   var list=document.getElementById('allot-bride-list');
   allotBride=list._brides[idx];
   document.getElementById('allot-selected-bride').textContent=allotBride.bride+' — '+allotBride.eventNo;
+  renderAllotDialogSummary();
   showModalSection('role');
 }
 
@@ -2573,7 +2697,7 @@ function confirmAllot(role){
   var bride=allotBride?allotBride.bride:'', eventNo=allotBride?allotBride.eventNo:'';
   var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+role;
   setAllotment(artist,activeDate,bride,eventNo,noteText);
-  clearSlotsForArtistDate(artist,activeDate);
+  addRTBlockForArtist(artist,activeDate,allotBride?allotBride.readyTime:'');
   if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:bride+' — '+eventNo})});
   renderCal();updateSidebar();refreshOpenPanels(artist);
   toast('Allotted as '+role+(allotBride?' for '+allotBride.bride:''));
@@ -2760,7 +2884,7 @@ function confirmSidersRole(role){
   var bride=allotBride?allotBride.bride:'', eventNo=allotBride?allotBride.eventNo:'';
   var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+roleText;
   setAllotment(artist,activeDate,bride,eventNo,noteText);
-  clearSlotsForArtistDate(artist,activeDate);
+  addRTBlockForArtist(artist,activeDate,allotBride?allotBride.readyTime:'');
   if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:bride+' — '+eventNo})});
   renderCal();updateSidebar();refreshOpenPanels(artist);
   toast('Allotted as '+role+' (Siders: '+count+')'+(allotBride?' for '+allotBride.bride:''));
@@ -3005,6 +3129,17 @@ function renderBookingBlock(b, ds){
   var mbColor=getMakeupByColor(b.makeupBy);
   var bgColor=mbColor?mbColor+'12':'#F8F7F8';
   var borderColor=mbColor||'#ECECEC';
+  autoBlockAllotmentsForDate(ds);
+  // Small line under each allotted artist showing which slots are blocked (from
+  // the event's RT) plus a link to edit/cancel those slots by hand.
+  function blockLine(artist){
+    var slots=getBusySlots(artist,ds);
+    var editLink=' <a href="javascript:void(0)" onclick="openSlotModal(\''+artist.replace(/'/g,"\\'")+'\',[\''+ds+'\'])" style="font-size:10px;font-weight:700;color:#A3365A;text-decoration:underline">✎ edit / cancel slots</a>';
+    if(slots.length){
+      return '<div style="font-size:10.5px;color:#9B1A2F;margin:0 0 5px 3px">⛔ Blocked: '+esc(slots.join(', '))+editLink+'</div>';
+    }
+    return '<div style="font-size:10.5px;color:#B08900;margin:0 0 5px 3px">⛔ Blocked all day (no RT set)'+editLink+'</div>';
+  }
 
   var matchingAllots=Object.keys(allotments).map(function(k){return allotments[k];}).filter(function(a){
     return a.date===ds && a.bride===b.bride && a.eventNo===b.eventNo;
@@ -3072,7 +3207,7 @@ function renderBookingBlock(b, ds){
 
   var otherRolesHtml=otherRoles.map(function(o){
     var e=o.entry;
-    return '<div style="font-size:11.5px;color:#444;margin-top:2px"><b>'+esc(o.role)+':</b> '+esc(e.artist)+quoteActions(o.role,e)+'</div>';
+    return '<div style="font-size:11.5px;color:#444;margin-top:2px"><b>'+esc(o.role)+':</b> '+esc(e.artist)+quoteActions(o.role,e)+'</div>'+blockLine(e.artist);
   }).join('');
 
   // ── Sider info box ──────────────────────────────
@@ -3109,7 +3244,7 @@ function renderBookingBlock(b, ds){
           +' · <a href="javascript:void(0)" onclick="refreshQuotation(\''+roleLbl+'\',\''+artistEsc+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+ds+'\',\''+locEsc+'\',\''+(entry.quotationUrl||'')+'\')" style="font-size:10px;font-weight:700;color:#0F9B8E">🔄 Check</a>'
           +(entry.quotationUrl?' <a href="'+entry.quotationUrl+'" target="_blank" rel="noopener" style="font-size:10px;color:#bbb">(placeholder)</a>':'');
       }
-      return '<div style="font-size:12.5px;margin-bottom:4px"><b>'+roleLbl+':</b> '+esc(entry.artist)+'<br><span style="margin-left:1px">'+actions+'</span></div>';
+      return '<div style="font-size:12.5px;margin-bottom:4px"><b>'+roleLbl+':</b> '+esc(entry.artist)+'<br><span style="margin-left:1px">'+actions+'</span></div>'+blockLine(entry.artist);
     }
     sidersBoxHtml='<div style="margin-top:8px;padding:9px 11px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px">'
       +'<div style="font-size:10px;font-weight:800;color:#0F9B8E;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">🧵 Sider</div>'
@@ -3124,7 +3259,10 @@ function renderBookingBlock(b, ds){
 
   return '<div style="background:'+bgColor+';border-left:4px solid '+borderColor+';border-radius:10px;padding:10px 12px;margin-bottom:10px">'
     +'<div style="font-size:13.5px;font-weight:800;color:#222;margin-bottom:8px">'+esc(b.bride)+(b.makeupBy?' <span style="display:inline-block;font-size:13px;font-weight:800;color:#fff;background:'+mbColor+';border-radius:6px;padding:2px 10px;margin-left:4px;letter-spacing:.2px">'+esc(b.makeupBy)+'</span>':'')+'</div>'
-    +'<div style="font-size:12px;color:#333;line-height:2.2">'+roleLine('MA')+'<br>'+roleLine('HA')+'</div>'
+    +'<div style="font-size:12px;color:#333">'
+      +'<div style="line-height:2.0">'+roleLine('MA')+'</div>'+(roleMap['MA']?blockLine(roleMap['MA'].artist):'')
+      +'<div style="line-height:2.0">'+roleLine('HA')+'</div>'+(roleMap['HA']?blockLine(roleMap['HA'].artist):'')
+    +'</div>'
     +otherRolesHtml
     +sidersBoxHtml
     +'<div style="font-size:11.5px;color:#666;margin-top:6px">'+esc(b.eventNo)+(b.eventName?' · '+esc(b.eventName):'')+'</div>'

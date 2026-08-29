@@ -378,6 +378,17 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
         <div id="connection-status"></div>
       </div>
 
+      <div class="set-card" style="border-color:#B7E4DC">
+        <div class="set-card-title"><i class="ti ti-download" style="font-size:18px;color:#0F9B8E" aria-hidden="true"></i>Backup &amp; Restore (your allotments, blocks &amp; siders)</div>
+        <div class="set-card-sub">Your data is saved in this browser and synced to your Google Sheet. Use this to keep a file copy too, or to move everything to another laptop/phone. Restoring replaces the data in whichever browser you import it into.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">
+          <button onclick="exportBackup()" style="height:44px;padding:0 18px;border-radius:11px;background:#0F9B8E;color:#fff;border:none;font-size:13px;font-weight:800;cursor:pointer">⬇ Export backup (.json)</button>
+          <label style="height:44px;padding:0 18px;border-radius:11px;background:#fff;color:#0F7A6E;border:1.5px solid #0F9B8E;font-size:13px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center">⬆ Import backup
+            <input type="file" accept="application/json,.json" onchange="importBackup(this)" style="display:none">
+          </label>
+        </div>
+      </div>
+
       <div class="set-card" style="border-color:#F4C0D1">
         <div class="set-card-title"><i class="ti ti-refresh" style="font-size:18px;color:#A3365A" aria-hidden="true"></i>Step 2 — Load bride dates</div>
         <div class="set-card-sub">Chrome blocks direct connections to Google Sheets. Use this simple 3-step process instead — takes 20 seconds.</div>
@@ -1657,8 +1668,9 @@ function doPost(e) {
         <button onclick="confirmAllot('AST')" style="height:44px;border-radius:12px;background:#3B6D11;color:#fff;border:none;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:0.3px">Assistant</button>
         <button onclick="confirmAllot('CC')" style="height:44px;border-radius:12px;background:#B5720A;color:#fff;border:none;font-size:11px;font-weight:800;cursor:pointer;letter-spacing:0.2px">Content Creator</button>
       </div>
+      <div id="allot-sider-groups" style="margin-top:8px"></div>
       <div style="margin-top:8px">
-        <button onclick="openSidersFlow()" style="height:44px;width:100%;border-radius:12px;background:#0F9B8E;color:#fff;border:none;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:0.3px">🧵 Siders</button>
+        <button onclick="openSidersFlow()" style="height:44px;width:100%;border-radius:12px;background:#0F9B8E;color:#fff;border:none;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:0.3px">🧵 + New sider group</button>
       </div>
       <button onclick="backToBrides()" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
     </div>
@@ -1667,16 +1679,21 @@ function doPost(e) {
          getting ready alongside the bride, plus the artist assigned to them -->
     <div id="allot-siders-section" style="display:none;margin-top:12px">
       <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Sider details — extra person(s) also getting ready</div>
+      <div id="siders-edit-banner" style="display:none;background:#FFF3CD;border:1.5px solid #F5D98A;border-radius:9px;padding:8px 10px;font-size:11px;color:#7A5C00;margin-bottom:10px"></div>
+      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">Sider group name</div>
+      <div style="display:flex;gap:8px;margin-bottom:6px">
+        <button type="button" onclick="setSiderGroupName('Groom Siders')" style="flex:1;height:34px;border-radius:9px;background:#EAF6F4;color:#0F7A6E;border:1.5px solid #B7E4DC;font-size:12px;font-weight:700;cursor:pointer">Groom Siders</button>
+        <button type="button" onclick="setSiderGroupName(&quot;Bride's Siders&quot;)" style="flex:1;height:34px;border-radius:9px;background:#FBE8EF;color:#A3365A;border:1.5px solid #F4C0D1;font-size:12px;font-weight:700;cursor:pointer">Bride's Siders</button>
+      </div>
+      <input id="siders-names" type="text" placeholder="e.g. Groom Siders, Bride's Sister" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:10px;font-family:inherit">
       <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">No. of siders (extra people)</div>
-      <input id="siders-count" type="number" min="1" value="1" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:10px;font-family:inherit">
-      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">Who are they? (comma separated)</div>
-      <input id="siders-names" type="text" placeholder="e.g. Bride's Mom, Bride's Sister" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:12px;font-family:inherit">
+      <input id="siders-count" type="number" min="1" value="1" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:12px;font-family:inherit">
       <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">Artist doing their look — confirm as</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button onclick="confirmSidersRole('MA')" style="height:48px;border-radius:12px;background:#A3365A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">MA</button>
         <button onclick="confirmSidersRole('HA')" style="height:48px;border-radius:12px;background:#6B3A8A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">HA</button>
       </div>
-      <div style="font-size:10px;color:#aaa;margin-top:6px;line-height:1.5">This uses whichever artist is currently selected up top for the sider's look too. To use a different artist for the sider, switch the artist dropdown first, then allot again.</div>
+      <div style="font-size:10px;color:#aaa;margin-top:6px;line-height:1.5">Uses whichever artist is selected in the dropdown up top. Confirming MA (or HA) for a group that already has one <b>replaces</b> that artist — so re-allotting is just: pick the new artist, confirm the same role. Different group names (Groom vs Bride's Siders) stay separate.</div>
       <button onclick="showModalSection('role')" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
     </div>
 
@@ -1867,6 +1884,38 @@ function autoBlockAllotmentsForDate(ds){
     Object.keys(union).forEach(function(s){setSlotBusy(a,ds,s);});
   });
 }
+// ── Auto-allot Anshul ─────────────────────────────────
+// Any booking whose "Makeup by" is Anshul / AAS (Anshul A Saraogi), in any
+// capitalisation, gets Anshul set as MA automatically — no manual allot needed.
+// Only fills MA when the event has none yet, so if you assign someone else as
+// MA that choice stays. Change the artist name below if it's ever spelled
+// differently in your artist list.
+var HEAD_ARTIST_NAME='Anshul';
+function isAnshulMakeupBy(mb){
+  var s=String(mb||'').trim().toLowerCase();
+  if(!s)return false;
+  if(s==='aas'||s==='aas makeup'||s==='aas studio'||s==='anshul a saraogi')return true;
+  return /\banshul\b/.test(s); // "anshul", "makeup by anshul", "anshul a saraogi", etc.
+}
+function eventHasMA(ds,bride,eventNo){
+  return Object.keys(allotments).some(function(k){
+    var a=allotments[k];
+    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return false;
+    var p=parseAllotNote(a.note);
+    if(/Siders\s*\(/i.test(p.roleText))return false; // a sider's MA doesn't count as the bride's MA
+    return /\bMA\b/.test(p.roleText);
+  });
+}
+function autoAllotHeadArtist(ds){
+  getBookingsForDate(ds).forEach(function(b){
+    if(!isAnshulMakeupBy(b.makeupBy))return;
+    if(eventHasMA(ds,b.bride,b.eventNo))return; // leave any MA already chosen alone
+    var noteText=b.bride+' — '+b.eventNo+' — MA';
+    setAllotment(HEAD_ARTIST_NAME,ds,b.bride,b.eventNo,noteText);
+    addRTBlockForArtist(HEAD_ARTIST_NAME,ds,b.readyTime);
+    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:HEAD_ARTIST_NAME,date:ds,status:'ALLOT',note:noteText,eventKey:b.bride+' — '+b.eventNo})});
+  });
+}
 function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
 function sbar(m,tp){var b=document.getElementById('sbar');b.textContent=m;b.className='sbar show sy-'+tp;if(tp==='ok')setTimeout(()=>{b.className='sbar';},3000);}
 function akey(a,d){return a+'||'+d;}
@@ -1897,8 +1946,65 @@ function mergeDraftsFromServer(rows){
   });
   saveDraftsLocal();
 }
-function allotKey(a,d,bride,eventNo){return a+'||'+d+'||'+(bride||'')+'||'+(eventNo||'');}
+// A discriminator appended to the key ONLY for sider allotments, so several
+// sider GROUPS (e.g. "Groom Siders" + "Bride's Siders") and each group's MA/HA
+// can all coexist for one event instead of overwriting each other. Normal (non-
+// sider) allotments get an empty disc → identical key to before → nothing about
+// existing allotments changes.
+function allotDisc(note){
+  if(!note)return '';
+  var p=parseAllotNote(note);
+  var rt=p.roleText||'';
+  if(!/Siders\s*\(/i.test(rt))return '';
+  var role=(rt.match(/\b(MA|HA|DR|AST|CC)\b/)||[])[1]||'';
+  var lm=rt.match(/Siders\s*\(\d+\)\s*:?\s*(.*)$/i);
+  var label=(lm?(lm[1]||''):'').trim().toLowerCase();
+  return '||S|'+label+'|'+role;
+}
+function allotKey(a,d,bride,eventNo,note){return a+'||'+d+'||'+(bride||'')+'||'+(eventNo||'')+allotDisc(note);}
 function saveAllot(){try{localStorage.setItem('bmp_allot_v1',JSON.stringify(allotments));}catch(e){}}
+
+// ── Backup / Restore ───────────────────────────────────
+// Everything the app knows (allotments, RT blocks, bookings cache, quotation
+// drafts, and your saved Web App URL) lives under localStorage keys starting
+// "bmp_". Export bundles them into one JSON file; Import writes them back into
+// whatever browser you're in. The Google Sheet is still the live shared copy —
+// this is just a portable, offline snapshot you control.
+function exportBackup(){
+  try{
+    var data={};
+    for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k&&k.indexOf('bmp_')===0)data[k]=localStorage.getItem(k);}
+    var payload={_type:'anshul-roster-backup',_version:1,_savedAt:new Date().toISOString(),data:data};
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    var stamp=new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+    a.href=url;a.download='roster-backup-'+stamp+'.json';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    toast('Backup downloaded');
+  }catch(e){toast('Backup failed: '+(e&&e.message||e));}
+}
+function importBackup(input){
+  var file=input.files&&input.files[0];
+  if(!file){return;}
+  var reader=new FileReader();
+  reader.onload=function(){
+    try{
+      var payload=JSON.parse(reader.result);
+      var data=(payload&&payload.data&&typeof payload.data==='object')?payload.data:payload;
+      if(!data||typeof data!=='object')throw new Error('not a valid backup file');
+      var keys=Object.keys(data).filter(function(k){return k.indexOf('bmp_')===0;});
+      if(!keys.length)throw new Error('no roster data found in this file');
+      if(!confirm('Restore '+keys.length+' data group(s) from this backup? This replaces the data currently in THIS browser.')){input.value='';return;}
+      keys.forEach(function(k){try{localStorage.setItem(k,String(data[k]));}catch(e){}});
+      toast('Backup restored — reloading…');
+      setTimeout(function(){location.reload();},700);
+    }catch(e){toast('Import failed: '+(e&&e.message||e));}
+    input.value='';
+  };
+  reader.readAsText(file);
+}
 function getAllotments(a,d){
   var pre=a+'||'+d+'||';
   var out=[];
@@ -1906,7 +2012,7 @@ function getAllotments(a,d){
   return out;
 }
 function setAllotment(a,d,bride,eventNo,note,quotationUrl,quoteDataSig){
-  var key=allotKey(a,d,bride,eventNo);
+  var key=allotKey(a,d,bride,eventNo,note);
   var existingUrl=quotationUrl!==undefined?quotationUrl:(allotments[key]?allotments[key].quotationUrl:'');
   var existingSig=quoteDataSig!==undefined?quoteDataSig:(allotments[key]?allotments[key].quoteDataSig:'');
   allotments[key]={artist:a,date:d,bride:bride||'',eventNo:eventNo||'',note:note,quotationUrl:existingUrl||'',quoteDataSig:existingSig||''};
@@ -1923,8 +2029,8 @@ function setAllotmentQuotationUrl(a,d,bride,eventNo,url,sig){
     saveAllot();
   }
 }
-function removeAllotment(a,d,bride,eventNo){
-  delete allotments[allotKey(a,d,bride,eventNo)];
+function removeAllotment(a,d,bride,eventNo,note){
+  delete allotments[allotKey(a,d,bride,eventNo,note)];
   saveAllot();
 }
 // Rebuilds the allotments store fresh from a server 'avail' array — called on
@@ -2359,6 +2465,7 @@ function renderCatGroups(items, getName, renderChip){
 
 function showAvailExpand(ds, activeSlot) {
   lastAEDate = ds; lastAESlot = activeSlot || null;
+  autoAllotHeadArtist(ds);
   autoBlockAllotmentsForDate(ds);
   var d = new Date(ds+'T00:00:00');
   var label = d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
@@ -2658,6 +2765,7 @@ function renderAllotDialogSummary(){
 
 function openAllotFlow(){
   renderAllotDialogSummary();
+  renderSiderGroupsForRoleSection();
   var brides=getBookingsForDate(activeDate);
   if(!brides.length){
     // No bride bookings on this date — just allot directly to MA/HA
@@ -2681,6 +2789,7 @@ function selectAllotBride(idx){
   allotBride=list._brides[idx];
   document.getElementById('allot-selected-bride').textContent=allotBride.bride+' — '+allotBride.eventNo;
   renderAllotDialogSummary();
+  renderSiderGroupsForRoleSection();
   showModalSection('role');
 }
 
@@ -2867,32 +2976,107 @@ function downloadQuotationPdf(role, artist, bride, ds, location){
   doc.save(filename);
 }
 
-function openSidersFlow(){
-  document.getElementById('siders-count').value=1;
-  document.getElementById('siders-names').value='';
+var siderEditMode=false;
+function setSiderGroupName(n){document.getElementById('siders-names').value=n;}
+function openSidersFlow(prefillLabel, prefillCount){
+  document.getElementById('siders-count').value=prefillCount||1;
+  document.getElementById('siders-names').value=prefillLabel||'';
+  var banner=document.getElementById('siders-edit-banner');
+  if(prefillLabel){
+    siderEditMode=true;
+    banner.style.display='';
+    banner.innerHTML='Re-allotting group <b>'+esc(prefillLabel)+'</b>. Pick the new artist in the dropdown, then tap MA or HA — it replaces that role\u2019s current artist for this group only.';
+  } else {
+    siderEditMode=false;
+    banner.style.display='none';
+    banner.innerHTML='';
+  }
   showModalSection('siders');
+}
+
+// Find a specific sider group's role allotment (any artist) for an event.
+function findSiderAllot(ds,bride,eventNo,label,role){
+  var want=(label||'').trim().toLowerCase(),found=null;
+  Object.keys(allotments).forEach(function(k){
+    if(found)return;
+    var a=allotments[k];
+    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return;
+    var p=parseAllotNote(a.note); if(!/Siders\s*\(/i.test(p.roleText))return;
+    var r=(p.roleText.match(/\b(MA|HA)\b/)||[])[1]||'';
+    var lm=p.roleText.match(/Siders\s*\(\d+\)\s*:?\s*(.*)$/i);
+    var lbl=(lm?(lm[1]||''):'').trim().toLowerCase();
+    if(r===role && lbl===want)found={k:k,a:a};
+  });
+  return found;
+}
+// All sider groups for an event, grouped by name, each with its MA/HA record.
+function siderGroupsForEvent(ds,bride,eventNo){
+  var groups={},order=[];
+  Object.keys(allotments).forEach(function(k){
+    var a=allotments[k];
+    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return;
+    var p=parseAllotNote(a.note); if(!/Siders\s*\(/i.test(p.roleText))return;
+    var lm=String(a.note||'').match(/Siders\s*\((\d+)\)\s*:?\s*(.*)$/i);
+    var label=(lm?(lm[2]||''):'').trim(),count=lm?lm[1]:'';
+    var kk=label.toLowerCase()||'(unnamed)';
+    if(!groups[kk]){groups[kk]={label:label||'(unnamed)',count:count,MA:null,HA:null};order.push(kk);}
+    var role=(p.roleText.match(/\b(MA|HA)\b/)||[])[1]||'';
+    if(role==='MA')groups[kk].MA=a; else if(role==='HA')groups[kk].HA=a;
+    if(count)groups[kk].count=count;
+  });
+  return order.map(function(kk){return groups[kk];});
+}
+// Existing sider groups shown in the allot dialog's role section — tap to re-allot.
+function renderSiderGroupsForRoleSection(){
+  var el=document.getElementById('allot-sider-groups'); if(!el)return;
+  if(!allotBride){el.innerHTML='';return;}
+  var groups=siderGroupsForEvent(activeDate,allotBride.bride,allotBride.eventNo);
+  if(!groups.length){el.innerHTML='<div style="font-size:11px;color:#aaa;margin:4px 0">No sider groups yet for this event.</div>';return;}
+  el.innerHTML='<div style="font-size:10px;font-weight:800;color:#0F9B8E;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Existing sider groups — tap to re-allot</div>'
+    +groups.map(function(g){
+      var lbl=(g.label||'').replace(/'/g,"\\'");
+      return '<button onclick="openSidersFlow(\''+lbl+'\',\''+(g.count||'')+'\')" style="display:block;width:100%;text-align:left;min-height:40px;border-radius:10px;background:#F0FAF8;border:1.5px solid #B7E4DC;color:#0F7A6E;font-size:12px;font-weight:700;cursor:pointer;padding:8px 12px;margin-bottom:6px">'
+        +'🧵 '+esc(g.label)+' <span style="font-weight:500;color:#666">('+esc(g.count||'?')+')</span>'
+        +'<div style="font-size:11px;font-weight:500;color:#555;margin-top:2px">MA: '+(g.MA?esc(g.MA.artist):'—')+' · HA: '+(g.HA?esc(g.HA.artist):'—')+'</div>'
+        +'</button>';
+    }).join('');
+}
+// Open the modal straight into a sider group's re-allot form (from a booking card).
+function openSiderGroupEditor(ds,bride,eventNo,label,count){
+  activeDate=ds;
+  var bk=getBookingsForDate(ds).find(function(x){return x.bride===bride && x.eventNo===eventNo;});
+  allotBride=bk||{bride:bride,eventNo:eventNo,location:'',eventName:'',readyTime:''};
+  var d=new Date(ds+'T00:00:00');
+  document.getElementById('note-modal-title').textContent=d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'});
+  document.getElementById('note-modal-sub').textContent='Re-allot sider group';
+  document.getElementById('allot-selected-bride').textContent=bride+' — '+eventNo;
+  renderAllotDialogSummary();
+  renderSiderGroupsForRoleSection();
+  openSidersFlow(label,count);
+  document.getElementById('note-modal-wrap').classList.add('open');
 }
 
 function confirmSidersRole(role){
   var artist=document.getElementById('artist-sel').value;
   if(!artist||!activeDate)return;
   var count=parseInt(document.getElementById('siders-count').value,10)||1;
-  var names=document.getElementById('siders-names').value.trim();
-  if(!names){toast("Please type who the extra person is (e.g. Bride's Mom) before confirming");return;}
-  var extra='Siders ('+count+')'+(names?': '+names:'');
-  var roleText=role+' — '+extra;
+  var label=document.getElementById('siders-names').value.trim();
+  if(!label){toast("Type a sider group name first (e.g. Groom Siders)");return;}
   var bride=allotBride?allotBride.bride:'', eventNo=allotBride?allotBride.eventNo:'';
-  var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+roleText;
+  // Re-allot = replace: if this group already has an artist in this role, drop them first.
+  var existing=findSiderAllot(activeDate,bride,eventNo,label,role);
+  if(existing && existing.a.artist!==artist){
+    removeAllotment(existing.a.artist,activeDate,bride,eventNo,existing.a.note);
+    if(!getAllotments(existing.a.artist,activeDate).length)clearSlotsForArtistDate(existing.a.artist,activeDate);
+    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist:existing.a.artist,date:activeDate,eventKey:bride+' — '+eventNo})});
+  }
+  var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+role+' — Siders ('+count+'): '+label;
   setAllotment(artist,activeDate,bride,eventNo,noteText);
   addRTBlockForArtist(artist,activeDate,allotBride?allotBride.readyTime:'');
   if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:bride+' — '+eventNo})});
-  renderCal();updateSidebar();refreshOpenPanels(artist);
-  toast('Allotted as '+role+' (Siders: '+count+')'+(allotBride?' for '+allotBride.bride:''));
-  if(ALLOT_FORM_LINKS[role]){
-    showAllotFormLink(role);
-  } else {
-    closeModal();
-  }
+  renderCal();updateSidebar();refreshOpenPanels(artist);renderSiderGroupsForRoleSection();renderAllotDialogSummary();
+  toast((existing?'Re-allotted ':'Allotted ')+role+' \u2014 '+label);
+  if(ALLOT_FORM_LINKS[role]){ showAllotFormLink(role); } else { showModalSection('role'); }
 }
 
 function markSel(status){
@@ -3129,6 +3313,7 @@ function renderBookingBlock(b, ds){
   var mbColor=getMakeupByColor(b.makeupBy);
   var bgColor=mbColor?mbColor+'12':'#F8F7F8';
   var borderColor=mbColor||'#ECECEC';
+  autoAllotHeadArtist(ds);
   autoBlockAllotmentsForDate(ds);
   // Small line under each allotted artist showing which slots are blocked (from
   // the event's RT) plus a link to edit/cancel those slots by hand.
@@ -3210,20 +3395,9 @@ function renderBookingBlock(b, ds){
     return '<div style="font-size:11.5px;color:#444;margin-top:2px"><b>'+esc(o.role)+':</b> '+esc(e.artist)+quoteActions(o.role,e)+'</div>'+blockLine(e.artist);
   }).join('');
 
-  // ── Sider info box ──────────────────────────────
+  // ── Sider info boxes — one per group (Groom Siders, Bride's Siders, …) ──
   var sidersBoxHtml='';
   if(sidersAllots.length){
-    var sInfo=null, sMA=null, sHA=null;
-    sidersAllots.forEach(function(a){
-      var parsed=parseAllotNote(a.note);
-      var roleM=parsed.roleText.match(/\b(MA|HA)\b/);
-      var roleLetter=roleM?roleM[1]:'';
-      var m=String(a.note||'').match(/Siders\s*\((\d+)\)\s*:?\s*(.*)$/i);
-      if(m && !sInfo)sInfo={count:m[1], names:(m[2]||'').trim()};
-      var entry={artist:a.artist, quotationUrl:a.quotationUrl, quoteDataSig:a.quoteDataSig, note:a.note};
-      if(roleLetter==='MA')sMA=entry;
-      else if(roleLetter==='HA')sHA=entry;
-    });
     function sActionRow(entry,roleLbl){
       if(!entry)return '<div style="font-size:12px;color:#bbb;margin-bottom:3px">'+roleLbl+': —</div>';
       var artistEsc=entry.artist.replace(/'/g,"\\'");
@@ -3246,13 +3420,35 @@ function renderBookingBlock(b, ds){
       }
       return '<div style="font-size:12.5px;margin-bottom:4px"><b>'+roleLbl+':</b> '+esc(entry.artist)+'<br><span style="margin-left:1px">'+actions+'</span></div>'+blockLine(entry.artist);
     }
-    sidersBoxHtml='<div style="margin-top:8px;padding:9px 11px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px">'
-      +'<div style="font-size:10px;font-weight:800;color:#0F9B8E;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">🧵 Sider</div>'
-      +(sInfo && sInfo.names ? '<div style="font-size:13px;font-weight:800;color:#222;margin-bottom:2px">'+esc(sInfo.names)+'</div>' : '')
-      +'<div style="font-size:11px;color:#666;margin-bottom:6px">No. of Sider — '+(sInfo?esc(sInfo.count):'—')+'</div>'
-      +sActionRow(sMA,'MA')
-      +sActionRow(sHA,'HA')
-    +'</div>';
+    // group the sider allotments by their group name
+    var sGroups={}, sOrder=[];
+    sidersAllots.forEach(function(a){
+      var parsed=parseAllotNote(a.note);
+      var m=String(a.note||'').match(/Siders\s*\((\d+)\)\s*:?\s*(.*)$/i);
+      var label=(m?(m[2]||''):'').trim(), count=m?m[1]:'';
+      var kk=label.toLowerCase()||'(unnamed)';
+      if(!sGroups[kk]){sGroups[kk]={label:label,count:count,MA:null,HA:null};sOrder.push(kk);}
+      var roleLetter=(parsed.roleText.match(/\b(MA|HA)\b/)||[])[1]||'';
+      var entry={artist:a.artist, quotationUrl:a.quotationUrl, quoteDataSig:a.quoteDataSig, note:a.note};
+      if(roleLetter==='MA')sGroups[kk].MA=entry; else if(roleLetter==='HA')sGroups[kk].HA=entry;
+      if(count)sGroups[kk].count=count;
+    });
+    sidersBoxHtml=sOrder.map(function(kk){
+      var g=sGroups[kk];
+      var lblEsc=(g.label||'').replace(/'/g,"\\'");
+      var brideEsc=b.bride.replace(/'/g,"\\'");
+      var eventNoEsc=b.eventNo.replace(/'/g,"\\'");
+      return '<div style="margin-top:8px;padding:9px 11px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px">'
+          +'<div style="font-size:10px;font-weight:800;color:#0F9B8E;text-transform:uppercase;letter-spacing:.5px">🧵 Sider</div>'
+          +'<a href="javascript:void(0)" onclick="openSiderGroupEditor(\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+lblEsc+'\',\''+(g.count||'')+'\')" style="font-size:10px;font-weight:700;color:#A3365A;text-decoration:underline">✎ Edit / re-allot</a>'
+        +'</div>'
+        +(g.label?'<div style="font-size:13px;font-weight:800;color:#222;margin-bottom:2px">'+esc(g.label)+'</div>':'')
+        +'<div style="font-size:11px;color:#666;margin-bottom:6px">No. of Sider — '+(g.count?esc(g.count):'—')+'</div>'
+        +sActionRow(g.MA,'MA')
+        +sActionRow(g.HA,'HA')
+      +'</div>';
+    }).join('');
   }
 
   var pdfLine=b.pdfUrl?'<a href="'+b.pdfUrl+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:3px;margin-top:6px;font-size:10.5px;font-weight:700;color:#C0392B;text-decoration:none;background:#FFECEC;border:1.5px solid #F4C0C0;border-radius:6px;padding:2px 9px">📄 View PDF</a>':'';

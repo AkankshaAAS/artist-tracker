@@ -261,28 +261,28 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
             <select id="artist-sel" onchange="onArtistChange()">
               <option value="">— select artist —</option>
               <optgroup label="Makeup & Hair Artists">
-              <option>Anitashil</option><option>Anshul</option><option>Avni</option><option>Babita</option><option>Beena ji</option>
+              <option>Anitashil</option><option>Anshul</option><option>Avni</option><option>Babita</option>
               <option>Bhakti Panchal</option><option>Devangi</option><option>Ekta</option><option>Hamida</option>
               <option>Hayat</option><option>Hetal</option><option>Ishani</option><option>Javed Ali</option>
               <option>Jyoti Mandhare</option><option>Jyotinath</option><option>Karishma</option><option>Kavita</option>
               <option>Khushboo</option><option>Lata</option><option>Madhu</option><option>Malika</option>
               <option>Manisha</option><option>Meenaji</option><option>Meenal</option><option>Mini</option>
               <option>Mohini</option><option>Nehal</option><option>Nilofer</option><option>Nisha</option>
-              <option>Pariksha</option><option>Payal</option><option>Pinky</option><option>Pooja</option>
+              <option>Payal</option><option>Pinky</option><option>Pooja</option>
               <option>Poonam</option><option>Pramila</option><option>Priya</option><option>Rajeshwari</option>
-              <option>Ravleen</option><option>Reeta</option><option>Rika</option><option>Ritika</option>
+              <option>Ravleen</option><option>Rika</option><option>Ritika</option>
               <option>Saba</option><option>Sana</option><option>Sandeep</option><option>Sapana</option>
               <option>Sayyam</option><option>Shifa</option><option>Shruti</option><option>Shubham</option>
-              <option>Siddhi</option><option>Simran K</option><option>Sittu</option><option>Tripti</option>
+              <option>Siddhi</option><option>Simran K</option><option>Tripti</option>
               <option>Tuba</option><option>Tyra</option><option>Vaishali</option><option>Vanita</option>
               <option>Vidya</option><option>Vidya sion</option><option>Vilapa</option><option>Vinni</option>
-              <option>Yamini</option><option>Yogita</option>
+              <option>Yogita</option>
               </optgroup>
               <optgroup label="Content Creator">
               <option>Moksha</option><option>Shadab</option><option>Khushi Jain</option><option>Sonam</option>
               </optgroup>
               <optgroup label="Drappist">
-              <option>Tejas</option><option>Alpa</option><option>Pallavi</option><option>Lata Drappist</option><option>Kiran</option>
+              <option>Tejas</option><option>Alpa</option><option>Pallavi</option><option>Kiran</option>
               </optgroup>
               <optgroup label="Assistant">
               <option>Situ</option><option>Poonam</option>
@@ -2047,6 +2047,77 @@ function rebuildAllotmentsFromServer(rows){
 function initials(n){if(!n)return'?';var p=n.trim().split(' ');return(p.length>1?p[0][0]+p[1][0]:n.slice(0,2)).toUpperCase();}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
+// ── Pricing reference (display only — does not affect allotments) ──
+var PRICING_SECTIONS=[
+  {name:'Hair Artist', color:'#6B3A8A', tiers:[
+    {tier:'1–2K', note:'Siders', people:['Babita','Ekta','Hayat','Hetal','Jyotinath','Malika','Mini','Mohini','Pinki','Pooja','Poonam','Lata','Ravleen','Siya','Poonam Dombivali','Avni Dombivali','Taira','Anjali','Duhita','Farida','Manisha','Khushboo','Purvi','Riya','Vaishali','Vanita','Wahida','Shruti','Tuba']},
+    {tier:'2–5K', people:['Devangi (S)','Siddhi (B+S)','Yogita (B+S)','Nilofer (B+S)','Pramila (S)','Ayaz (B+S)','Bina (B+S)','Rahul (B+S)','Nehal (B+S)','Jyotinath (B)','Binaji (B)','Nusrat (B+S)','Anuradha Shinde (B+S)','Hamida (B+S)']},
+    {tier:'5–10K', people:['Aarti (B+S)','Devangi (B)','Jyoti Mandhare (B)','Javed Ali (B)','Pramila (B)','Raieshwari (B)','Tripti (B)','Vidya (B)','Saba (B)','Shubham (B)','Rahul (B)','Sandeep (B)']},
+    {tier:'10–15K', people:['Kavita (B+S)','Avni (S)','Bhakti Panchal (B)','Anitashil (B)','Preksha (B)','Mina ji (B)','Wini (B)']},
+    {tier:'15–25K', people:['Avni (B)','Vidya Sion (B)','Monica (B)','Ritika']}
+  ]},
+  {name:'Makeup', color:'#A3365A', tiers:[
+    {tier:'1–2K', people:['Manisha (S)','Situ (S)','Sayyam (S)','Villapa (S)','Jheel (S)','Isha (S)','Babita (S)','Shifa (S)','Pinki (S)','Poonam (S)','Hayat (S)','Rika (S)','Taira (S)','Sapna (S)','Shruti (S)','Sana (S)','Priya (S)','Karishma','Madhu','Payal']},
+    {tier:'2–5K', people:['Nisha (B+S)','Ishani (B+S)','Kajal (B+S)','Shivani (B+S)','Shirin (S)','Pramila (B+S)','Isha (B)','Meenal (B+S)','Shifa (B)','Devanshi (B+S)','Ashwini (B+S)','Anuradha (B+S)']},
+    {tier:'5–10K', people:['Shirin (B)','Bharti (B)','Shivani (B)']}
+  ]},
+  {name:'Drappist + HA', color:'#0C447C', tiers:[
+    {tier:'', people:['Lata','Mini','Babita','Devangi','Jyotinath','Khushboo','Nilofer','Hayat','Pramila','Poonam','Siddhi','Wini','Vidya','Hetal','Shubhangi','Avni Dombivali','Poonam Dombivali']}
+  ]},
+  {name:'Drappist', color:'#0F7A6E', tiers:[
+    {tier:'', people:['Tejas','Alpa','Pallavi','Kiran','Sapna Bengali draping']}
+  ]}
+];
+// Map pricing-list spellings to the app's bookable artist names (obvious variants).
+var PRICE_ALIAS={'ravlreen':'Ravleen','pinki':'Pinky','taira':'Tyra','villapa':'Vilapa','minaji':'Meenaji','wini':'Vinni','raieshwari':'Rajeshwari','sapna':'Sapana','vidyasion':'Vidya sion'};
+function normName(s){return String(s||'').toLowerCase().replace(/\s*\([^)]*\)\s*$/,'').replace(/[^a-z0-9]/g,'');}
+var _NORM2CANON=null;
+function _ensureNorm(){ if(_NORM2CANON)return; _NORM2CANON={}; ALL_ARTISTS.forEach(function(a){_NORM2CANON[normName(a)]=a;}); }
+function canonArtist(pricingName){
+  _ensureNorm();
+  var n=normName(pricingName);
+  if(PRICE_ALIAS[n])return PRICE_ALIAS[n];
+  if(_NORM2CANON[n])return _NORM2CANON[n];
+  return null; // not a bookable artist yet (new/unmatched name)
+}
+function priceTag(raw){var m=String(raw).match(/\(([^)]+)\)\s*$/);return m?m[1].toUpperCase().replace(/\s+/g,''):'';}
+function priceBase(raw){return String(raw).replace(/\s*\([^)]*\)\s*$/,'').trim();}
+function priceChip(canonical, display, tag, status){
+  var badge=tag?' <span style="margin-left:7px;font-size:9px;font-weight:800;color:#fff;background:'+(tag==='B'?'#A3365A':tag==='S'?'#0F9B8E':tag==='B+S'?'#6B3A8A':'#bbb')+';border-radius:5px;padding:1px 5px;vertical-align:1px">'+esc(tag)+'</span>':'';
+  if(!canonical){
+    return '<span title="Not added as a bookable artist yet" style="display:inline-flex;align-items:center;background:#FAFAFA;border:1.5px dashed #DADADA;border-radius:20px;padding:5px 12px;font-size:12px;color:#bbb;margin:3px 3px">'+esc(display)+badge+'</span>';
+  }
+  var base,brd,col,extra='';
+  if(status==='busy'){ base='#FDE8ED'; brd='#F4B8C5'; col='#C0687D'; extra='opacity:.6;text-decoration:line-through'; }
+  else if(status==='free'){ base='#E8F5DC'; brd='#B5DD97'; col='#1A6B00'; }
+  else if(status==='tentative'){ base='#FFF3DC'; brd='#FFD580'; col='#7A4E00'; }
+  else { base='#F5F5F5'; brd='#DEDEDE'; col='#444'; }
+  return '<span onclick="selectArtistFromPanel(\''+canonical.replace(/'/g,"\\'")+'\')" title="Tap to select '+esc(canonical)+'" style="display:inline-flex;align-items:center;background:'+base+';border:1.5px solid '+brd+';border-radius:20px;padding:5px 12px;font-size:12px;font-weight:600;color:'+col+';margin:3px 3px;cursor:pointer;'+extra+'">'+esc(display)+badge+'</span>';
+}
+// Renders the whole artist list grouped by pricing section/tier. `st` maps a
+// canonical artist name → 'busy'|'free'|'tentative'|'notmarked'. `rendered`
+// collects which bookable names were shown, so leftovers go under "Other".
+function renderPricePanelHTML(st, rendered){
+  var html='';
+  PRICING_SECTIONS.forEach(function(sec){
+    html+='<div style="font-size:12px;font-weight:800;color:'+sec.color+';margin:12px 0 3px;text-transform:uppercase;letter-spacing:.4px">'+esc(sec.name)+'</div>';
+    sec.tiers.forEach(function(t){
+      if(t.tier)html+='<div style="font-size:10px;font-weight:700;color:#888;margin:6px 0 2px">₹'+esc(t.tier)+(t.note?' <span style="color:#aaa">('+esc(t.note)+')</span>':'')+'</div>';
+      html+='<div style="display:flex;flex-wrap:wrap">'+t.people.map(function(p){
+        var canon=canonArtist(p); if(canon&&rendered)rendered[canon]=true;
+        return priceChip(canon, priceBase(p), priceTag(p), canon?st[canon]:null);
+      }).join('')+'</div>';
+    });
+  });
+  [['CC','Content Creator','#B5720A'],['AST','Assistant','#3B6D11']].forEach(function(c){
+    var members=CATEGORY_MEMBERS[c[0]]||[];
+    if(!members.length)return;
+    html+='<div style="font-size:12px;font-weight:800;color:'+c[2]+';margin:12px 0 3px;text-transform:uppercase;letter-spacing:.4px">'+esc(c[1])+'</div>';
+    html+='<div style="display:flex;flex-wrap:wrap">'+members.map(function(a){ if(rendered)rendered[a]=true; return priceChip(a,a,'',st[a]); }).join('')+'</div>';
+  });
+  return html;
+}
+
 function switchPage(p){
   document.getElementById('page-calendar').style.display=p==='calendar'?'':'none';
   document.getElementById('page-pdfs').style.display=p==='pdfs'?'':'none';
@@ -2284,7 +2355,9 @@ function loadPastedData(){
   if(data.bookings){bookings=cleanBookings(data.bookings);try{localStorage.setItem('bmp_bk6',JSON.stringify(bookings));}catch(e){}}
   if(data.avail){var __nonAllot=[];data.avail.forEach(function(r){if(!r.artist||!r.date)return;if(r.status==='ALLOT')return;__nonAllot.push(r);});__nonAllot.forEach(function(r){avail[akey(r.artist,r.date)]={status:r.status,note:r.note||''};});save();rebuildAllotmentsFromServer(data.avail);}if(data.drafts)mergeDraftsFromServer(data.drafts);
   document.getElementById('paste-input').value='';
+  var jumped=jumpToFirstBookingMonth();
   renderCal();updateSidebar();
+  if(jumped){var mn=new Date(vy,vm,1).toLocaleDateString('en-IN',{month:'long',year:'numeric'});toast('Loaded — jumped to '+mn+' where your bookings are');}
   var withPdf=bookings.filter(function(b){return b.pdfUrl;}).length;
   if(bookings.length===0 && (!data.avail||!data.avail.length)){
     ps.innerHTML='<div style="padding:10px;background:#FFF8EC;border-radius:10px;color:#7A4E00;font-size:13px;font-weight:600">The data pasted fine, but the sheet returned 0 bookings and 0 availability rows — so nothing new appears on the calendar. Double-check the Web App is pointing at the right Sales Sheet.</div>';
@@ -2347,6 +2420,21 @@ function onArtistChange(){
 }
 function changeMonth(d){vm+=d;if(vm>11){vm=0;vy++;}if(vm<0){vm=11;vy--;}selDates.clear();renderCal();updateSidebar();}
 function goToday(){vm=new Date().getMonth();vy=new Date().getFullYear();selDates.clear();renderCal();updateSidebar();}
+// After a data load, if the month you're looking at has no bookings but other
+// months do, hop to the earliest month that does — so a freshly-loaded sheet
+// never looks empty just because today's month happens to have nothing.
+function jumpToFirstBookingMonth(){
+  if(!bookings.length)return false;
+  if(getBookingsForMonth(vm,vy).length)return false; // current month already has bookings
+  var dates=bookings.map(function(b){return parseBookingDate(b.date);}).filter(Boolean).sort(function(a,b){return a-b;});
+  if(!dates.length)return false;
+  // prefer the earliest booking month that is not in the past; else the earliest overall
+  var now=new Date(); now.setDate(1); now.setHours(0,0,0,0);
+  var future=dates.filter(function(d){return d>=now;});
+  var target=(future.length?future[0]:dates[0]);
+  vm=target.getMonth(); vy=target.getFullYear(); selDates.clear();
+  return true;
+}
 
 function renderCal(){
   document.getElementById('month-label').textContent=MONTHS[vm]+' '+vy;
@@ -2434,13 +2522,13 @@ function getMakeupByColor(name){
 }
 
 // All artists list (matches dropdown)
-var ALL_ARTISTS=['Anitashil','Anshul','Avni','Babita','Beena ji','Bhakti Panchal','Devangi','Ekta','Hamida','Hayat','Hetal','Ishani','Javed Ali','Jyoti Mandhare','Jyotinath','Karishma','Kavita','Khushboo','Lata','Madhu','Malika','Manisha','Meenaji','Meenal','Mini','Mohini','Nehal','Nilofer','Nisha','Pariksha','Payal','Pinky','Pooja','Poonam','Pramila','Priya','Rajeshwari','Ravleen','Reeta','Rika','Ritika','Saba','Sana','Sandeep','Sapana','Sayyam','Shifa','Shruti','Shubham','Siddhi','Simran K','Sittu','Tripti','Tuba','Tyra','Vaishali','Vanita','Vidya','Vidya sion','Vilapa','Vinni','Yamini','Yogita','Moksha','Shadab','Khushi Jain','Sonam','Situ','Tejas','Alpa','Pallavi','Lata Drappist','Kiran'];
+var ALL_ARTISTS=['Anitashil','Anshul','Avni','Babita','Bhakti Panchal','Devangi','Ekta','Hamida','Hayat','Hetal','Ishani','Javed Ali','Jyoti Mandhare','Jyotinath','Karishma','Kavita','Khushboo','Lata','Madhu','Malika','Manisha','Meenaji','Meenal','Mini','Mohini','Nehal','Nilofer','Nisha','Payal','Pinky','Pooja','Poonam','Pramila','Priya','Rajeshwari','Ravleen','Rika','Ritika','Saba','Sana','Sandeep','Sapana','Sayyam','Shifa','Shruti','Shubham','Siddhi','Simran K','Tripti','Tuba','Tyra','Vaishali','Vanita','Vidya','Vidya sion','Vilapa','Vinni','Yogita','Moksha','Shadab','Khushi Jain','Sonam','Situ','Tejas','Alpa','Pallavi','Kiran','Siya','Poonam Dombivali','Avni Dombivali','Anjali','Duhita','Farida','Purvi','Riya','Wahida','Ayaz','Bina','Rahul','Binaji','Nusrat','Anuradha Shinde','Aarti','Preksha','Monica','Jheel','Isha','Kajal','Shivani','Shirin','Devanshi','Ashwini','Anuradha','Bharti','Shubhangi','Sapna Bengali draping'];
 
 var CATEGORY_LABELS={MUA:'Makeup & Hair Artists',CC:'Content Creator',DR:'Drappist',AST:'Assistant'};
 var CATEGORY_ORDER=['MUA','CC','DR','AST'];
 var CATEGORY_MEMBERS={
   CC:['Moksha','Shadab','Khushi Jain','Sonam'],
-  DR:['Tejas','Alpa','Pallavi','Lata Drappist','Kiran'],
+  DR:['Tejas','Alpa','Pallavi','Kiran','Sapna Bengali draping'],
   AST:['Situ']
 };
 function getArtistCategory(name){
@@ -2537,44 +2625,28 @@ function showAvailExpand(ds, activeSlot) {
   });
   html += '</div></div>';
 
-  // ── Available ───────────────────────────────────
+  // ── Artists grouped by pricing section; busy = struck through ──
+  var st={};
+  free.forEach(function(a){st[a]='free';});
+  notMarked.forEach(function(a){st[a]='notmarked';});
+  tentative.forEach(function(o){st[o.name]='tentative';});
+  busy.forEach(function(o){st[o.name]='busy';});
   var totalAvail = free.length + notMarked.length;
-  html += '<div style="margin-bottom:12px">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
+
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">';
   html += '<div style="font-size:10px;font-weight:800;color:#27500A;text-transform:uppercase;letter-spacing:.8px">✅ Available'+(activeSlot?' at RT '+activeSlot:'')+' — '+totalAvail+' artists</div>';
+  html += '<div style="font-size:10px;font-weight:800;color:#C0687D">🔴 Busy — '+busy.length+'</div>';
   html += '</div>';
+  html += '<div style="font-size:10px;color:#999;margin-bottom:6px">Struck-through = busy / allotted'+(activeSlot?' at '+activeSlot:' this day')+'. Badges: <b style="color:#A3365A">B</b> Bride · <b style="color:#0F9B8E">S</b> Siders · <b style="color:#6B3A8A">B+S</b> Both.</div>';
 
-  if (free.length) {
-    html += '<div style="font-size:10px;color:#27500A;font-weight:700;margin-bottom:4px;opacity:.7">MARKED FREE</div>';
-    html += renderCatGroups(free, function(a){return a;}, function(a){ return chip(a,'#1A6B00','#E8F5DC','#B5DD97','✓ '); });
-  }
+  var rendered={};
+  html += renderPricePanelHTML(st, rendered);
 
-  if (notMarked.length) {
-    html += '<div style="font-size:10px;color:#555;font-weight:700;margin-bottom:4px;opacity:.7">NOT YET MARKED</div>';
-    html += renderCatGroups(notMarked, function(a){return a;}, function(a){ return chip(a,'#444','#F5F5F5','#DEDEDE',''); });
-  }
-
-  if (!totalAvail) {
-    html += '<div style="font-size:12px;color:#999;font-style:italic;padding:4px 0">No artists available on this date.</div>';
-  }
-  html += '</div>';
-
-  // ── Tentative ───────────────────────────────────
-  if (tentative.length) {
-    html += '<div style="margin-bottom:12px;padding:10px 14px;background:#FFFBF0;border-radius:12px;border:1.5px solid #FFE0A0">';
-    html += '<div style="font-size:10px;font-weight:800;color:#7A4E00;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">⚠️ Tentative — '+tentative.length+'</div>';
-    html += renderCatGroups(tentative, function(a){return a.name;}, function(a){ return chip(a.name,'#7A4E00','#FFF3DC','#FFD580',''); });
-    html += '</div>';
-  }
-
-  // ── Busy / Allotted ─────────────────────────────
-  if (busy.length) {
-    html += '<div style="padding:10px 14px;background:#FFF5F7;border-radius:12px;border:1.5px solid #F4C0D1">';
-    html += '<div style="font-size:10px;font-weight:800;color:#8B1A2E;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px">🔴 Busy / Allotted — '+busy.length+'</div>';
-    html += renderCatGroups(busy, function(a){return a.name;}, function(a){
-      return '<span style="display:inline-flex;align-items:center;background:#FDE8ED;border:1.5px solid #F4B8C5;border-radius:20px;padding:5px 13px;font-size:12px;font-weight:600;color:#C0687D;margin:3px;text-decoration:line-through;opacity:.65">'+esc(a.name)+'</span>';
-    });
-    html += '</div>';
+  // Any bookable artist not placed in a pricing section (so nobody disappears)
+  var others = ALL_ARTISTS.filter(function(a){return !rendered[a];});
+  if (others.length) {
+    html += '<div style="font-size:12px;font-weight:800;color:#777;margin:12px 0 3px;text-transform:uppercase;letter-spacing:.4px">Other artists</div>';
+    html += '<div style="display:flex;flex-wrap:wrap">'+others.map(function(a){return priceChip(a,a,'',st[a]);}).join('')+'</div>';
   }
 
   html += '<div style="font-size:10px;color:#bbb;margin-top:10px;text-align:center">💡 Tap any artist name to select them on the calendar</div>';
@@ -3625,7 +3697,31 @@ function renderUnavailPage(){
   document.getElementById('unavail-list').innerHTML=html;
 }
 
+// Make sure every artist in ALL_ARTISTS has a pickable <option> in the dropdown
+// (the static list only covered the original artists). Additive + idempotent —
+// new names are appended into the optgroup that matches their category.
+function initArtistDropdown(){
+  var sel=document.getElementById('artist-sel'); if(!sel)return;
+  var existing={};
+  Array.prototype.forEach.call(sel.getElementsByTagName('option'),function(o){existing[(o.textContent||o.value||'').trim()]=true;});
+  var groups={};
+  Array.prototype.forEach.call(sel.getElementsByTagName('optgroup'),function(g){
+    var lbl=(g.getAttribute('label')||'').toLowerCase();
+    if(lbl.indexOf('content creator')>=0)groups.CC=g;
+    else if(lbl.indexOf('drappist')>=0)groups.DR=g;
+    else if(lbl.indexOf('assistant')>=0)groups.AST=g;
+    else if(lbl.indexOf('makeup')>=0||lbl.indexOf('hair')>=0)groups.MUA=g;
+  });
+  ALL_ARTISTS.forEach(function(a){
+    if(existing[a])return;
+    var g=groups[getArtistCategory(a)]||groups.MUA; if(!g)return;
+    var opt=document.createElement('option'); opt.textContent=a; g.appendChild(opt);
+    existing[a]=true;
+  });
+}
+
 if(!gasUrl)updateConnectionStatus(false);
+initArtistDropdown();
 renderCal();updateSidebar();
 renderLastSyncText();
 autoSyncOnLoad();

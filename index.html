@@ -295,6 +295,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
             <button class="mnav-btn" onclick="changeMonth(1)" aria-label="Next">&#8250;</button>
           </div>
           <button class="today-btn" onclick="goToday()">Today</button>
+          <button class="today-btn" onclick="showThingsToCheck()" style="background:#0F9B8E;color:#fff;border-color:#0F9B8E">✅ Things to Check</button>
         </div>
 
         <div class="cal-card">
@@ -312,6 +313,15 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
             <button onclick="closeAvailExpand()" style="background:rgba(255,255,255,0.18);border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:5px 11px;cursor:pointer;letter-spacing:.3px">✕ Close</button>
           </div>
           <div id="ae-body" style="padding:16px 16px 12px"></div>
+        </div>
+
+        <!-- THINGS TO CHECK PANEL -->
+        <div id="check-expand" style="display:none;margin:10px 0 4px;border-radius:16px;border:1.5px solid #B7E4DC;background:#fff;overflow:hidden;box-shadow:0 4px 24px rgba(15,155,142,0.12)">
+          <div style="background:linear-gradient(90deg,#0C6B60 0%,#12A594 100%);padding:13px 16px;display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:14px;font-weight:800;color:#fff;letter-spacing:.2px">✅ Things to Check — allotment &amp; quotation</span>
+            <button onclick="closeThingsToCheck()" style="background:rgba(255,255,255,0.18);border:none;border-radius:8px;color:#fff;font-size:12px;font-weight:600;padding:5px 11px;cursor:pointer">✕ Close</button>
+          </div>
+          <div id="check-body" style="padding:16px"></div>
         </div>
 
         <div class="action-hint" id="action-hint">Select an artist, then tap dates to select them</div>
@@ -462,6 +472,9 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 // ═══════════════════════════════════════════════════
 
 var SS_ID   = '';        // ← leave blank: script uses active spreadsheet
+// Bump this whenever you paste updated code, so the roster can show you which
+// version is actually live and you can confirm a deploy took effect.
+var SCRIPT_VERSION = 'v11-instant-sync';
 var RESP_SHEET  = 'Responses';
 var AVAIL_SHEET = 'Artist Availability';
 var DATES_SHEET = 'BOOKING_DATES';
@@ -936,8 +949,12 @@ function rebuildBookingDates() {
     var row        = data[i];
     var displayRow = displayData[i];
     var brideName = String(row[2] || '').trim();   // col C = Client Name
-    if (!brideName) continue;
+    var bookingId = String(row[1] || '').trim();   // col B = Booking ID
+    // Recognise a row as a real entry if it has EITHER a name OR a booking ID.
+    if (!brideName &amp;&amp; !bookingId) continue;
+    var displayName = brideName || ('Booking ' + bookingId);
 
+    var producedAny = false;
     EVENT_PAIRS.forEach(function(pair) {
       var rawDate   = row[pair.dateCol];
       var rawDetail = String(displayRow[pair.detailCol] || ''); // ← displayValues: RT stays as "12 PM"
@@ -951,30 +968,101 @@ function rebuildBookingDates() {
       var pdfUrl = getPdfUrl(row);
       rows.push([
         dateStr,
-        brideName,
+        displayName,
         pair.label,
         parsed.eventName,
         parsed.location,
         parsed.readyTime,
         dt ? dt.getMonth() + 1 : '',
         dt ? dt.getFullYear() : '',
-        String(row[1] || ''),  // col B = Booking ID
+        bookingId,
         pdfUrl,
         parsed.makeupBy
       ]);
+      producedAny = true;
     });
+
+    // Fallback: this row has a name/ID but NO structured "Event (Date)" column
+    // filled — e.g. a babyshower, or a booking where staff only typed the main
+    // DATE. Build one booking from the main DATE column (col D = index 3) so the
+    // entry still shows in the roster instead of silently vanishing. Recognised
+    // by name/ID (above); the date just tells the calendar where to place it.
+    if (!producedAny) {
+      var mainDate = (row[3] === '' || row[3] === null || row[3] === undefined) ? '' : row[3];
+      var mDisplay = String(displayRow[3] || '').trim(); // display value, in case it's text like "26/9/26"
+      var useDate  = (mainDate !== '') ? mainDate : mDisplay;
+      if (useDate !== '') {
+        var mdt = parseFlexibleDate(useDate);
+        rows.push([
+          formatDate(useDate),
+          displayName,
+          'Event 1',
+          '',
+          '',
+          '',
+          mdt ? mdt.getMonth() + 1 : '',
+          mdt ? mdt.getFullYear() : '',
+          bookingId,
+          getPdfUrl(row),
+          ''
+        ]);
+      }
+    }
   }
 
   // Skip the rewrite entirely if nothing changed since last time — avoids
   // needlessly re-writing (and re-locking) the whole sheet on every
   // maintenance run when the Responses sheet hasn't been touched.
-  var rowsSig = Utilities.base64Encode(Utilities.newBlob(JSON.stringify(rows)).getBytes()).substring(0, 40);
+  // FIX (was truncating to the first 40 base64 chars — only ~30 bytes, which
+  // never even got past the header row, so the signature was effectively
+  // constant and new rows appended to Responses stopped ever triggering a
+  // rebuild after the first run). Now hashes the FULL rows array with MD5,
+  // so any change anywhere — including a brand-new row at the bottom —
+  // produces a different signature and correctly triggers the rewrite.
+  var rowsJson = JSON.stringify(rows);
+  var digestBytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, rowsJson);
+  var rowsSig = digestBytes.map(function(b){ return ((b + 256) % 256).toString(16).padStart(2,'0'); }).join('');
   var props = PropertiesService.getScriptProperties();
   if (props.getProperty('bookingDatesSig') === rowsSig) return;
   props.setProperty('bookingDatesSig', rowsSig);
 
   sheets.datesSheet.clearContents();
   sheets.datesSheet.getRange(1, 1, rows.length, 11).setValues(rows);
+}
+
+// ── Instant update — installable "On edit" trigger ──────────────────
+// Fires the moment someone types into or pastes into the Responses tab
+// (a single cell, a whole pasted row, anything), and immediately rebuilds
+// BOOKING_DATES from the latest data — so a new/edited entry shows up in
+// the roster/calendar within seconds instead of waiting for the 5-minute
+// scheduledMaintenance run below.
+//
+// SETUP (one-time): Apps Script editor → clock icon (Triggers) on the
+// left → + Add Trigger → choose function: onResponsesEdit → Event
+// source: From spreadsheet → Event type: On edit → Save. Must be an
+// INSTALLABLE trigger (added via the Triggers UI, not just a function
+// named onEdit in the file) so it has permission to run rebuildBookingDates.
+function onResponsesEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    var sheet = e.range.getSheet();
+    if (sheet.getName() !== RESP_SHEET) return; // ignore edits to any other tab
+
+    // Guards against two near-simultaneous edits (e.g. a multi-column
+    // paste fires one event per affected column) triggering overlapping
+    // rebuilds. If a rebuild is already running, this edit's data will
+    // still get picked up — either by that in-flight run (if it hasn't
+    // read the row yet) or by the very next edit event.
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return;
+    try {
+      rebuildBookingDates();
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    Logger.log('onResponsesEdit error: ' + err);
+  }
 }
 
 // ── Background maintenance — call this from a TIME-DRIVEN TRIGGER, not
@@ -1186,7 +1274,7 @@ function autoBackfillQuotations(ss, limit) {
       // is (don't touch the URL/sig either way). This is what keeps a
       // genuinely-unfilled booking, like a placeholder generated before the
       // artist's form was submitted, showing "Fill Quotation" in the UI.
-      if (existingUrl && newSig === '') { results.skipped++; continue; }
+      if (existingUrl &amp;&amp; newSig === '') { results.skipped++; continue; }
 
       // Case 2: a quotation URL exists from BEFORE the QuoteDataSig column
       // was introduced (existingSig is blank), but real form data now
@@ -1199,9 +1287,9 @@ function autoBackfillQuotations(ss, limit) {
       // blank (not just untracked) must NOT take this shortcut — their
       // existing PDF really is just the placeholder, so it needs a full
       // regeneration once real data shows up, not just a sig stamp.
-      var isKnownGenuinelyBlank = /shubham/i.test(artistName) && /priya\s*hadawale/i.test(clientName)
-        && respDateNormTop && /-(17|18)$/.test(respDateNormTop);
-      if (existingUrl && existingSig === '' && newSig !== '' && !isKnownGenuinelyBlank) {
+      var isKnownGenuinelyBlank = /shubham/i.test(artistName) &amp;&amp; /priya\s*hadawale/i.test(clientName)
+        &amp;&amp; respDateNormTop &amp;&amp; /-(17|18)$/.test(respDateNormTop);
+      if (existingUrl &amp;&amp; existingSig === '' &amp;&amp; newSig !== '' &amp;&amp; !isKnownGenuinelyBlank) {
         availSheet.getRange(matchRowIdx + 1, 8).setValue(newSig);
         aData[matchRowIdx][7] = newSig;
         results.sigBackfilled++;
@@ -1209,7 +1297,7 @@ function autoBackfillQuotations(ss, limit) {
       }
 
       // Case 3: already up to date (sig matches what's submitted) — skip.
-      if (existingUrl && newSig === existingSig) { results.skipped++; continue; }
+      if (existingUrl &amp;&amp; newSig === existingSig) { results.skipped++; continue; }
 
       // Anything else (no URL yet, or data has genuinely changed since the
       // sig was last set) falls through to generate/regenerate below.
@@ -1487,12 +1575,13 @@ function doGet(e) {
   try {
     var ss = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
     ensureSheets(ss);
-    // Safety net only — if BOOKING_DATES doesn't exist yet (brand new sheet),
-    // build it once so sync isn't returning nothing. Otherwise this is now
-    // handled by the scheduledMaintenance() time-driven trigger (see setup
-    // instructions below), NOT on every request — see note below on why.
-    var _datesCheck = ss.getSheetByName(DATES_SHEET);
-    if (!_datesCheck || _datesCheck.getLastRow() &lt; 1) rebuildBookingDates();
+    // Always refresh BOOKING_DATES from the latest Responses, so ANY new or
+    // edited entry — whether a form submission or typed straight into the
+    // Responses tab — shows up on the very next sync. rebuildBookingDates() is
+    // signature-cached: if nothing in Responses changed since last time it
+    // returns immediately without rewriting, so unchanged syncs stay fast and
+    // it only does real work when there's genuinely something new.
+    try { rebuildBookingDates(); } catch (_eRebuild) {}
 
     // --- Read BOOKING_DATES ---
     var datesSheet = ss.getSheetByName(DATES_SHEET);
@@ -1525,7 +1614,7 @@ function doGet(e) {
                    emailedAt: a[6] ? String(a[6]) : '', quoteDataSig: a[7] ? String(a[7]) : '' });
     }
 
-    return jsonOut(e, { ok: true, bookings: bookings, avail: avail });
+    return jsonOut(e, { ok: true, bookings: bookings, avail: avail, codeVersion: SCRIPT_VERSION });
 
   } catch(err) {
     return jsonOut(e, { ok: false, error: err.toString() });
@@ -1606,6 +1695,9 @@ function doPost(e) {
           </div>
           <div style="background:#E6F1FB;border:1px solid #B5D4F4;border-radius:8px;padding:10px;font-size:11px;color:#0C447C;line-height:1.6">
             <b>One more setup step — makes sync fast:</b> in the Apps Script editor, click the clock icon (Triggers) on the left → + Add Trigger → function <code style="background:#fff;border-radius:3px;padding:1px 5px">scheduledMaintenance</code> → Event source <b>Time-driven</b> → Minutes timer → <b>Every 5 minutes</b> → Save. This moves the heavy sheet rebuild + quotation backfill off every page load / 90-second auto-poll and into the background, so syncing itself stays quick.
+          </div>
+          <div style="background:#F3EAFB;border:1px solid #DDC0F4;border-radius:8px;padding:10px;font-size:11px;color:#4E0C7C;line-height:1.6">
+            <b>Instant updates from Responses:</b> add a second trigger — clock icon (Triggers) → + Add Trigger → function <code style="background:#fff;border-radius:3px;padding:1px 5px">onResponsesEdit</code> → Event source <b>From spreadsheet</b> → Event type <b>On edit</b> → Save. This rebuilds BOOKING_DATES the moment anyone types or pastes into the Responses tab, instead of waiting for the 5-minute timer.
           </div>
           <div style="background:#FFF8EC;border:1px solid #FDE8C3;border-radius:8px;padding:10px;font-size:11px;color:#7A4E00;line-height:1.6">
             <b>Key format reminder:</b> Your sheet's combined column must have labels like<br>
@@ -2156,8 +2248,11 @@ function syncNow(){
       if(data.bookings){bookings=cleanBookings(data.bookings);try{localStorage.setItem('bmp_bk6',JSON.stringify(bookings));}catch(e){}}
       if(data.avail){var __nonAllot=[];data.avail.forEach(function(r){if(!r.artist||!r.date)return;if(r.status==='ALLOT')return;__nonAllot.push(r);});__nonAllot.forEach(function(r){avail[akey(r.artist,r.date)]={status:r.status,note:r.note||''};});save();rebuildAllotmentsFromServer(data.avail);}if(data.drafts)mergeDraftsFromServer(data.drafts);
       renderCal();updateSidebar();updateConnectionStatus(true);
+      var jumped=jumpToFirstBookingMonth();
+      if(jumped){renderCal();updateSidebar();}
       var withPdf2=bookings.filter(function(b){return b.pdfUrl;}).length;
-      showSyncOverlay('Synced! '+bookings.length+' bookings · '+withPdf2+' PDFs found','ok');
+      var ver=data.codeVersion?('script '+data.codeVersion):'⚠ OLD script — redeploy needed';
+      showSyncOverlay('Synced! '+bookings.length+' bookings · '+withPdf2+' PDFs · '+ver+(jumped?' — showing '+new Date(vy,vm,1).toLocaleDateString('en-IN',{month:'long',year:'numeric'}):''),'ok');
       resetSyncBtn();
       setLastSyncOk();
     })
@@ -2660,6 +2755,104 @@ function closeAvailExpand() {
   document.getElementById('avail-expand').style.display = 'none';
   lastAEDate = null; lastAESlot = null;
 }
+
+// ── Things to Check: allotment + quotation status per booking ──
+// Rule: every event needs an MA and an HA allotted. If allotted, the artist's
+// quotation must be filled — EXCEPT for Simran K and Anshul, who never need one.
+var QUOTE_EXEMPT=['simran k','anshul'];
+var checkScope='all';
+function isQuoteExempt(name){return QUOTE_EXEMPT.indexOf(String(name||'').trim().toLowerCase())>=0;}
+function roleEntryFor(ds,bride,eventNo,role){
+  var found=null;
+  Object.keys(allotments).forEach(function(k){
+    if(found)return;
+    var a=allotments[k];
+    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return;
+    var p=parseAllotNote(a.note);
+    if(/Siders\s*\(/i.test(p.roleText))return; // sider MA/HA don't count as the bride's own
+    var rm=p.roleText.match(/\b(MA|HA|DR|AST|CC)\b/);
+    if(rm&&rm[1]===role)found=a;
+  });
+  return found;
+}
+function checkRole(ds,bride,eventNo,role){
+  var a=roleEntryFor(ds,bride,eventNo,role);
+  if(!a)return {allotted:false};
+  var exempt=isQuoteExempt(a.artist);
+  return {allotted:true, artist:a.artist, exempt:exempt, quoteNeeded:!exempt, quoteFilled:!!(a.quotationUrl&&a.quoteDataSig)};
+}
+function eventCheck(b){
+  var ds=bookingDs(b);
+  var ma=checkRole(ds,b.bride,b.eventNo,'MA');
+  var ha=checkRole(ds,b.bride,b.eventNo,'HA');
+  var issues=[];
+  if(!ma.allotted)issues.push('MA not allotted');
+  else if(ma.quoteNeeded&&!ma.quoteFilled)issues.push('MA quotation pending — '+ma.artist);
+  if(!ha.allotted)issues.push('HA not allotted');
+  else if(ha.quoteNeeded&&!ha.quoteFilled)issues.push('HA quotation pending — '+ha.artist);
+  return {ds:ds,ma:ma,ha:ha,issues:issues,complete:issues.length===0};
+}
+function roleStatusHtml(label,r){
+  if(!r.allotted)return '<span style="color:#C0392B;font-weight:700">✗ '+label+' not allotted</span>';
+  var q = r.exempt ? '<span style="color:#888">(no quote needed)</span>'
+        : r.quoteFilled ? '<span style="color:#1A6B00;font-weight:700">✓ quote</span>'
+        : '<span style="color:#B8860B;font-weight:700">⏳ quote pending</span>';
+  return '<span style="color:#1A6B00;font-weight:700">✓ '+label+'</span> '+esc(r.artist)+' · '+q;
+}
+function showThingsToCheck(scope){
+  if(scope)checkScope=scope;
+  document.getElementById('avail-expand').style.display='none';
+  var el=document.getElementById('check-body'); if(!el)return;
+  var today=new Date(); today.setHours(0,0,0,0);
+  // Skip events whose date has already passed — only today and upcoming.
+  var list=bookings.filter(function(b){var d=parseBookingDate(b.date);return d&&d>=today;});
+  if(checkScope==='month')list=list.filter(function(b){var d=parseBookingDate(b.date);return d&&d.getMonth()===vm&&d.getFullYear()===vy;});
+  list.sort(function(a,b){return (parseBookingDate(a.date)||0)-(parseBookingDate(b.date)||0);});
+
+  var toggle='<div style="display:flex;gap:8px;margin-bottom:12px">'
+    +'<button onclick="showThingsToCheck(\'all\')" style="height:30px;padding:0 12px;border-radius:8px;border:1.5px solid '+(checkScope==='all'?'#0F9B8E':'#ECECEC')+';background:'+(checkScope==='all'?'#0F9B8E':'#fff')+';color:'+(checkScope==='all'?'#fff':'#777')+';font-size:11px;font-weight:700;cursor:pointer">All upcoming</button>'
+    +'<button onclick="showThingsToCheck(\'month\')" style="height:30px;padding:0 12px;border-radius:8px;border:1.5px solid '+(checkScope==='month'?'#0F9B8E':'#ECECEC')+';background:'+(checkScope==='month'?'#0F9B8E':'#fff')+';color:'+(checkScope==='month'?'#fff':'#777')+';font-size:11px;font-weight:700;cursor:pointer">This month</button>'
+    +'</div>';
+
+  document.getElementById('check-expand').style.display='';
+  document.getElementById('check-expand').scrollIntoView({behavior:'smooth',block:'nearest'});
+  if(!list.length){ el.innerHTML=toggle+'<div style="font-size:13px;color:#999;font-style:italic">No upcoming bookings'+(checkScope==='month'?' this month':'')+'.</div>'; return; }
+
+  // Group by date, chronological
+  var groups={}, order=[], doneCount=0, pendCount=0;
+  list.forEach(function(b){
+    var c=eventCheck(b);
+    if(c.complete)doneCount++; else pendCount++;
+    var ds=bookingDs(b);
+    if(!groups[ds]){groups[ds]=[];order.push(ds);}
+    groups[ds].push({b:b,c:c});
+  });
+
+  function row(item){
+    var b=item.b,c=item.c,pendingRow=!c.complete;
+    var head='<div style="font-size:12.5px;font-weight:800;color:#333">'+esc(b.bride)+' <span style="color:#A3365A">'+esc(b.eventNo||'')+'</span></div>';
+    var body='<div style="font-size:11.5px;color:#444;margin:2px 0 0 2px;line-height:1.7">'+roleStatusHtml('MA',c.ma)+'<br>'+roleStatusHtml('HA',c.ha)+'</div>';
+    return '<div style="border:1.5px solid '+(pendingRow?'#F3B9A6':'#CFE8CF')+';background:'+(pendingRow?'#FFF6F2':'#F4FBF2')+';border-radius:10px;padding:9px 11px;margin-bottom:8px">'+head+body+'</div>';
+  }
+
+  var html=toggle;
+  html+='<div style="display:flex;gap:14px;margin-bottom:12px;font-size:12px;font-weight:800">'
+    +'<span style="color:#333">'+list.length+' upcoming</span>'
+    +'<span style="color:#1A6B00">✓ '+doneCount+' sorted</span>'
+    +'<span style="color:#C0392B">⚠ '+pendCount+' need attention</span></div>';
+
+  order.forEach(function(ds){
+    var d=parseBookingDate(ds);
+    var dlabel=d?d.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'}):ds;
+    var anyPending=groups[ds].some(function(it){return !it.c.complete;});
+    html+='<div style="display:flex;align-items:center;gap:8px;margin:14px 0 7px">'
+      +'<span style="font-size:13px;font-weight:800;color:#72243E">'+esc(dlabel)+'</span>'
+      +'<span style="font-size:11px;font-weight:700;color:'+(anyPending?'#C0392B':'#1A6B00')+'">'+(anyPending?'⚠ pending':'✓ all set')+'</span></div>';
+    groups[ds].forEach(function(it){ html+=row(it); });
+  });
+  el.innerHTML=html;
+}
+function closeThingsToCheck(){ document.getElementById('check-expand').style.display='none'; }
 
 function selectArtistFromPanel(name) {
   var sel = document.getElementById('artist-sel');

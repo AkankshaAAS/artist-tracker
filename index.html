@@ -396,6 +396,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
           <label style="height:44px;padding:0 18px;border-radius:11px;background:#fff;color:#0F7A6E;border:1.5px solid #0F9B8E;font-size:13px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center">⬆ Import backup
             <input type="file" accept="application/json,.json" onchange="importBackup(this)" style="display:none">
           </label>
+          <button onclick="restorePreviousAllotments()" style="height:44px;padding:0 18px;border-radius:11px;background:#fff;color:#A3365A;border:1.5px solid #A3365A;font-size:13px;font-weight:800;cursor:pointer">↩ Recover siders from before last sync</button>
         </div>
       </div>
 
@@ -474,7 +475,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 var SS_ID   = '';        // ← leave blank: script uses active spreadsheet
 // Bump this whenever you paste updated code, so the roster can show you which
 // version is actually live and you can confirm a deploy took effect.
-var SCRIPT_VERSION = 'v11-instant-sync';
+var SCRIPT_VERSION = 'v12-fast-sync';
 var RESP_SHEET  = 'Responses';
 var AVAIL_SHEET = 'Artist Availability';
 var DATES_SHEET = 'BOOKING_DATES';
@@ -575,13 +576,35 @@ function parseAllotNoteServer(note) {
 // with mode:'no-cors', the app can't see that failure either. When upsert's
 // match silently fails, it doesn't error — it appends a brand new duplicate
 // row instead of updating the existing one, quietly splitting the data.
+// Extracts a role identity from a note ("… — MA" → "R|MA"; "… — MA — Siders
+// (2): Groom Siders" → "S|groom siders|MA"). Used so the same artist can hold
+// two different roles (MA and HA) on one event, and so distinct sider groups
+// stay separate — instead of one silently overwriting the other.
+function roleIdFromNote(note) {
+  var parts = String(note || '').split(' — ');
+  var roleText = parts.length &gt;= 3 ? parts.slice(2).join(' — ') : '';
+  var m = roleText.match(/\b(MA|HA|DR|AST|CC)\b/);
+  var role = m ? m[1] : '';
+  if (/Siders\s*\(/i.test(roleText)) {
+    var lm = roleText.match(/Siders\s*\(\d+\)\s*:?\s*(.*)$/i);
+    var label = (lm ? (lm[1] || '') : '').trim().toLowerCase();
+    return 'S|' + label + '|' + role;
+  }
+  return role ? ('R|' + role) : '';
+}
 function eventKeyMatchesNote(eventKey, note) {
   if (!eventKey) return false;
   var ek = parseAllotNoteServer(eventKey);
   var rn = parseAllotNoteServer(note);
   if (!ek.bride || !rn.bride) return false;
   if (!namesLooselyMatch(ek.bride, rn.bride)) return false;
-  return ek.eventNo.trim().toLowerCase() === rn.eventNo.trim().toLowerCase();
+  if (ek.eventNo.trim().toLowerCase() !== rn.eventNo.trim().toLowerCase()) return false;
+  // If the eventKey carries a role/sider identity, require it to match too, so
+  // MA vs HA (same artist) and different sider groups are treated as distinct
+  // rows. A legacy eventKey with no role still matches on bride+event alone.
+  var ekRole = roleIdFromNote(eventKey);
+  if (ekRole) return ekRole === roleIdFromNote(note);
+  return true;
 }
 
 function findFormResponse(role, artistName, clientName, eventDateStr) {
@@ -1013,56 +1036,13 @@ function rebuildBookingDates() {
   // Skip the rewrite entirely if nothing changed since last time — avoids
   // needlessly re-writing (and re-locking) the whole sheet on every
   // maintenance run when the Responses sheet hasn't been touched.
-  // FIX (was truncating to the first 40 base64 chars — only ~30 bytes, which
-  // never even got past the header row, so the signature was effectively
-  // constant and new rows appended to Responses stopped ever triggering a
-  // rebuild after the first run). Now hashes the FULL rows array with MD5,
-  // so any change anywhere — including a brand-new row at the bottom —
-  // produces a different signature and correctly triggers the rewrite.
-  var rowsJson = JSON.stringify(rows);
-  var digestBytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, rowsJson);
-  var rowsSig = digestBytes.map(function(b){ return ((b + 256) % 256).toString(16).padStart(2,'0'); }).join('');
+  var rowsSig = Utilities.base64Encode(Utilities.newBlob(JSON.stringify(rows)).getBytes()).substring(0, 40);
   var props = PropertiesService.getScriptProperties();
   if (props.getProperty('bookingDatesSig') === rowsSig) return;
   props.setProperty('bookingDatesSig', rowsSig);
 
   sheets.datesSheet.clearContents();
   sheets.datesSheet.getRange(1, 1, rows.length, 11).setValues(rows);
-}
-
-// ── Instant update — installable "On edit" trigger ──────────────────
-// Fires the moment someone types into or pastes into the Responses tab
-// (a single cell, a whole pasted row, anything), and immediately rebuilds
-// BOOKING_DATES from the latest data — so a new/edited entry shows up in
-// the roster/calendar within seconds instead of waiting for the 5-minute
-// scheduledMaintenance run below.
-//
-// SETUP (one-time): Apps Script editor → clock icon (Triggers) on the
-// left → + Add Trigger → choose function: onResponsesEdit → Event
-// source: From spreadsheet → Event type: On edit → Save. Must be an
-// INSTALLABLE trigger (added via the Triggers UI, not just a function
-// named onEdit in the file) so it has permission to run rebuildBookingDates.
-function onResponsesEdit(e) {
-  try {
-    if (!e || !e.range) return;
-    var sheet = e.range.getSheet();
-    if (sheet.getName() !== RESP_SHEET) return; // ignore edits to any other tab
-
-    // Guards against two near-simultaneous edits (e.g. a multi-column
-    // paste fires one event per affected column) triggering overlapping
-    // rebuilds. If a rebuild is already running, this edit's data will
-    // still get picked up — either by that in-flight run (if it hasn't
-    // read the row yet) or by the very next edit event.
-    var lock = LockService.getScriptLock();
-    if (!lock.tryLock(5000)) return;
-    try {
-      rebuildBookingDates();
-    } finally {
-      lock.releaseLock();
-    }
-  } catch (err) {
-    Logger.log('onResponsesEdit error: ' + err);
-  }
 }
 
 // ── Background maintenance — call this from a TIME-DRIVEN TRIGGER, not
@@ -1146,6 +1126,15 @@ function hashFormResponse(fr) {
 // regular sync so page loads stay fast; pass 0 ("no limit") for the manual
 // "Generate missing quotations now" button, which should catch up on
 // everything in one go.
+// Split a form's Event Date answer into a list of yyyy-MM-dd dates. The ops
+// manager can type several dates for one quotation, e.g. "19/10/2026,20/10/2026".
+function parseDateList(sVal) {
+  if (!sVal) return [];
+  return String(sVal).split(/[,;\n]+/).map(function(x) {
+    try { var d = parseFlexibleDate(String(x).trim()); return d ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd') : ''; }
+    catch (e) { return ''; }
+  }).filter(function(x) { return x; });
+}
 function autoBackfillQuotations(ss, limit) {
   var availSheet = ss.getSheetByName(AVAIL_SHEET);
   var aData = availSheet.getDataRange().getValues();
@@ -1199,40 +1188,34 @@ function autoBackfillQuotations(ss, limit) {
         if (!namesLooselyMatch(parsedBride || note, clientName)) continue;
         candidates.push(j);
       }
-      var matchRowIdx = -1;
+      // ONE form response can cover several dates (comma-separated in the form's
+      // Event Date field) — same quotation for all of them. Build the quote for
+      // EVERY allotment on any of those dates for this artist+bride.
+      var respDatesList = parseDateList(rv(r, map, 'eventDate'));
+      var matchRowIdxs = [];
       if (candidates.length === 1) {
-        matchRowIdx = candidates[0]; // only one booking for this artist+bride — unambiguous, no date needed
+        matchRowIdxs = [candidates[0]]; // only one booking for this artist+bride — unambiguous
       } else if (candidates.length &gt; 1) {
-        var dateMatches = [];
-        for (var c = 0; c &lt; candidates.length; c++) {
-          if (respDateNormTop &amp;&amp; normDate(aData[candidates[c]][1]) === respDateNormTop) dateMatches.push(candidates[c]);
-        }
-        if (dateMatches.length === 1) {
-          matchRowIdx = dateMatches[0];
-        } else if (dateMatches.length &gt; 1) {
-          // More than one event on the SAME day for this artist+bride (e.g.
-          // two looks in one day) — date alone can't tell them apart. Fall
-          // back to an Event No column if the sheet has one (it doesn't by
-          // default; add a question like "Event No" to the MA/HA form to
-          // enable this automatically).
-          var respEventNo = rv(r, map, 'eventNoLabel');
-          if (respEventNo) {
-            for (var dnum = 0; dnum &lt; dateMatches.length; dnum++) {
-              var candNote = String(aData[dateMatches[dnum]][3] || '');
-              if (parseAllotNoteServer(candNote).eventNo.toLowerCase().indexOf(respEventNo.toLowerCase()) !== -1) {
-                matchRowIdx = dateMatches[dnum]; break;
+        respDatesList.forEach(function(rd) {
+          var onDate = candidates.filter(function(ci) { return normDate(aData[ci][1]) === rd; });
+          if (onDate.length === 1) {
+            matchRowIdxs.push(onDate[0]);
+          } else if (onDate.length &gt; 1) {
+            // Two events on the SAME day — date alone can't separate them; use
+            // an "Event No" answer if the form has one, else skip (don't guess).
+            var respEventNo = rv(r, map, 'eventNoLabel');
+            if (respEventNo) {
+              for (var dnum = 0; dnum &lt; onDate.length; dnum++) {
+                var candNote = String(aData[onDate[dnum]][3] || '');
+                if (parseAllotNoteServer(candNote).eventNo.toLowerCase().indexOf(respEventNo.toLowerCase()) !== -1) { matchRowIdxs.push(onDate[dnum]); break; }
               }
             }
           }
-          // Still nothing — don't guess between two identical-looking same-day
-          // events; leave as noMatch so it's handled manually via Fill
-          // Quotation rather than risking the wrong one being overwritten.
-        }
-        // Multiple events, but this response row's date didn't match any of
-        // them exactly — don't guess; leave as noMatch rather than risk
-        // overwriting the wrong event's quotation.
+        });
+        matchRowIdxs = matchRowIdxs.filter(function(v, i, arr) { return arr.indexOf(v) === i; });
       }
-      if (matchRowIdx === -1) { results.noMatch++; continue; }
+      if (!matchRowIdxs.length) { results.noMatch++; continue; }
+      matchRowIdxs.forEach(function(matchRowIdx) {
 
       var existingUrl = String(aData[matchRowIdx][5] || '');
       var existingSig = String(aData[matchRowIdx][7] || ''); // col H — fingerprint baked into the CURRENT pdf
@@ -1274,7 +1257,7 @@ function autoBackfillQuotations(ss, limit) {
       // is (don't touch the URL/sig either way). This is what keeps a
       // genuinely-unfilled booking, like a placeholder generated before the
       // artist's form was submitted, showing "Fill Quotation" in the UI.
-      if (existingUrl &amp;&amp; newSig === '') { results.skipped++; continue; }
+      if (existingUrl && newSig === '') { results.skipped++; return; }
 
       // Case 2: a quotation URL exists from BEFORE the QuoteDataSig column
       // was introduced (existingSig is blank), but real form data now
@@ -1287,17 +1270,17 @@ function autoBackfillQuotations(ss, limit) {
       // blank (not just untracked) must NOT take this shortcut — their
       // existing PDF really is just the placeholder, so it needs a full
       // regeneration once real data shows up, not just a sig stamp.
-      var isKnownGenuinelyBlank = /shubham/i.test(artistName) &amp;&amp; /priya\s*hadawale/i.test(clientName)
-        &amp;&amp; respDateNormTop &amp;&amp; /-(17|18)$/.test(respDateNormTop);
-      if (existingUrl &amp;&amp; existingSig === '' &amp;&amp; newSig !== '' &amp;&amp; !isKnownGenuinelyBlank) {
+      var isKnownGenuinelyBlank = /shubham/i.test(artistName) && /priya\s*hadawale/i.test(clientName)
+        && respDateNormTop && /-(17|18)$/.test(respDateNormTop);
+      if (existingUrl && existingSig === '' && newSig !== '' && !isKnownGenuinelyBlank) {
         availSheet.getRange(matchRowIdx + 1, 8).setValue(newSig);
         aData[matchRowIdx][7] = newSig;
         results.sigBackfilled++;
-        continue;
+        return;
       }
 
       // Case 3: already up to date (sig matches what's submitted) — skip.
-      if (existingUrl &amp;&amp; newSig === existingSig) { results.skipped++; continue; }
+      if (existingUrl && newSig === existingSig) { results.skipped++; return; }
 
       // Anything else (no URL yet, or data has genuinely changed since the
       // sig was last set) falls through to generate/regenerate below.
@@ -1322,6 +1305,7 @@ function autoBackfillQuotations(ss, limit) {
       } catch(errB) {
         results.errors.push(artistName + '/' + clientName + ': ' + errB);
       }
+      }); // matchRowIdxs.forEach
     }
   });
 
@@ -1582,6 +1566,11 @@ function doGet(e) {
     // returns immediately without rewriting, so unchanged syncs stay fast and
     // it only does real work when there's genuinely something new.
     try { rebuildBookingDates(); } catch (_eRebuild) {}
+    // NOTE: quotation PDFs are NOT built here anymore — building them inline made
+    // every sync slow. The roster fires a separate background request
+    // (action=backfillQuotations) right after each sync, and the timed
+    // scheduledMaintenance() trigger also catches up, so quotes still appear
+    // promptly without holding up the sync.
 
     // --- Read BOOKING_DATES ---
     var datesSheet = ss.getSheetByName(DATES_SHEET);
@@ -1695,9 +1684,6 @@ function doPost(e) {
           </div>
           <div style="background:#E6F1FB;border:1px solid #B5D4F4;border-radius:8px;padding:10px;font-size:11px;color:#0C447C;line-height:1.6">
             <b>One more setup step — makes sync fast:</b> in the Apps Script editor, click the clock icon (Triggers) on the left → + Add Trigger → function <code style="background:#fff;border-radius:3px;padding:1px 5px">scheduledMaintenance</code> → Event source <b>Time-driven</b> → Minutes timer → <b>Every 5 minutes</b> → Save. This moves the heavy sheet rebuild + quotation backfill off every page load / 90-second auto-poll and into the background, so syncing itself stays quick.
-          </div>
-          <div style="background:#F3EAFB;border:1px solid #DDC0F4;border-radius:8px;padding:10px;font-size:11px;color:#4E0C7C;line-height:1.6">
-            <b>Instant updates from Responses:</b> add a second trigger — clock icon (Triggers) → + Add Trigger → function <code style="background:#fff;border-radius:3px;padding:1px 5px">onResponsesEdit</code> → Event source <b>From spreadsheet</b> → Event type <b>On edit</b> → Save. This rebuilds BOOKING_DATES the moment anyone types or pastes into the Responses tab, instead of waiting for the 5-minute timer.
           </div>
           <div style="background:#FFF8EC;border:1px solid #FDE8C3;border-radius:8px;padding:10px;font-size:11px;color:#7A4E00;line-height:1.6">
             <b>Key format reminder:</b> Your sheet's combined column must have labels like<br>
@@ -2005,7 +1991,7 @@ function autoAllotHeadArtist(ds){
     var noteText=b.bride+' — '+b.eventNo+' — MA';
     setAllotment(HEAD_ARTIST_NAME,ds,b.bride,b.eventNo,noteText);
     addRTBlockForArtist(HEAD_ARTIST_NAME,ds,b.readyTime);
-    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:HEAD_ARTIST_NAME,date:ds,status:'ALLOT',note:noteText,eventKey:b.bride+' — '+b.eventNo})});
+    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:HEAD_ARTIST_NAME,date:ds,status:'ALLOT',note:noteText,eventKey:noteText})});
   });
 }
 function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
@@ -2047,11 +2033,15 @@ function allotDisc(note){
   if(!note)return '';
   var p=parseAllotNote(note);
   var rt=p.roleText||'';
-  if(!/Siders\s*\(/i.test(rt))return '';
   var role=(rt.match(/\b(MA|HA|DR|AST|CC)\b/)||[])[1]||'';
-  var lm=rt.match(/Siders\s*\(\d+\)\s*:?\s*(.*)$/i);
-  var label=(lm?(lm[1]||''):'').trim().toLowerCase();
-  return '||S|'+label+'|'+role;
+  if(/Siders\s*\(/i.test(rt)){
+    var lm=rt.match(/Siders\s*\(\d+\)\s*:?\s*(.*)$/i);
+    var label=(lm?(lm[1]||''):'').trim().toLowerCase();
+    return '||S|'+label+'|'+role;
+  }
+  // Normal allotment: key by role too, so the SAME artist can be both MA and HA
+  // for one event without one overwriting the other.
+  return role?('||R|'+role):'';
 }
 function allotKey(a,d,bride,eventNo,note){return a+'||'+d+'||'+(bride||'')+'||'+(eventNo||'')+allotDisc(note);}
 function saveAllot(){try{localStorage.setItem('bmp_allot_v1',JSON.stringify(allotments));}catch(e){}}
@@ -2097,6 +2087,32 @@ function importBackup(input){
   };
   reader.readAsText(file);
 }
+// Recover allotments (including manually-made siders) captured just before the
+// last sync overwrote them, and re-push each to the Sheet so they persist.
+function restorePreviousAllotments(){
+  var raw;
+  try{ raw=localStorage.getItem('bmp_allot_prev'); }catch(e){}
+  if(!raw){ toast('No pre-sync snapshot found yet'); return; }
+  var snap; try{ snap=JSON.parse(raw); }catch(e){ toast('Snapshot unreadable'); return; }
+  var data=snap&&snap.data?snap.data:null;
+  if(!data||!Object.keys(data).length){ toast('Snapshot is empty'); return; }
+  var when=snap.at?new Date(snap.at).toLocaleString('en-IN'):'earlier';
+  if(!confirm('Restore '+Object.keys(data).length+' allotment(s)/sider(s) captured '+when+'? They will be merged back in and re-saved to your Sheet.')) return;
+  var restored=0;
+  Object.keys(data).forEach(function(k){
+    var a=data[k];
+    if(!a||!a.artist||!a.date)return;
+    // merge (don't wipe current) and re-push to server so it survives future syncs
+    allotments[k]=a;
+    if(gasUrl){
+      fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:a.artist,date:a.date,status:'ALLOT',note:a.note||'',eventKey:(a.note||((a.bride||'')+' — '+(a.eventNo||''))),quotationUrl:a.quotationUrl||''})});
+    }
+    restored++;
+  });
+  saveAllot();
+  renderCal();updateSidebar();
+  toast('Restored '+restored+' entries — re-saving to your Sheet');
+}
 function getAllotments(a,d){
   var pre=a+'||'+d+'||';
   var out=[];
@@ -2129,6 +2145,14 @@ function removeAllotment(a,d,bride,eventNo,note){
 // every sync so stale/removed allotments don't linger, and duplicate rows in
 // the sheet naturally collapse (same key = same slot).
 function rebuildAllotmentsFromServer(rows){
+  // SAFETY NET: before we replace local allotments with the server's copy, stash
+  // the current ones (which include any manually-created siders) so they can be
+  // one-click restored if a sync ever comes back missing something.
+  try{
+    if(Object.keys(allotments).length){
+      localStorage.setItem('bmp_allot_prev', JSON.stringify({at:Date.now(), count:Object.keys(allotments).length, data:allotments}));
+    }
+  }catch(e){}
   allotments={};
   rows.forEach(function(r){
     if(r.status!=='ALLOT')return;
@@ -2143,18 +2167,19 @@ function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace
 var PRICING_SECTIONS=[
   {name:'Hair Artist', color:'#6B3A8A', tiers:[
     {tier:'1–2K', note:'Siders', people:['Babita','Ekta','Hayat','Hetal','Jyotinath','Malika','Mini','Mohini','Pinki','Pooja','Poonam','Lata','Ravleen','Siya','Poonam Dombivali','Avni Dombivali','Taira','Anjali','Duhita','Farida','Manisha','Khushboo','Purvi','Riya','Vaishali','Vanita','Wahida','Shruti','Tuba']},
-    {tier:'2–5K', people:['Devangi (S)','Siddhi (B+S)','Yogita (B+S)','Nilofer (B+S)','Pramila (S)','Ayaz (B+S)','Bina (B+S)','Rahul (B+S)','Nehal (B+S)','Jyotinath (B)','Binaji (B)','Nusrat (B+S)','Anuradha Shinde (B+S)','Hamida (B+S)']},
-    {tier:'5–10K', people:['Aarti (B+S)','Devangi (B)','Jyoti Mandhare (B)','Javed Ali (B)','Pramila (B)','Raieshwari (B)','Tripti (B)','Vidya (B)','Saba (B)','Shubham (B)','Rahul (B)','Sandeep (B)']},
-    {tier:'10–15K', people:['Kavita (B+S)','Avni (S)','Bhakti Panchal (B)','Anitashil (B)','Preksha (B)','Mina ji (B)','Wini (B)']},
-    {tier:'15–25K', people:['Avni (B)','Vidya Sion (B)','Monica (B)','Ritika']}
+    {tier:'2–5K', people:['Devangi (S)','Siddhi (B+S)','Yogita (B+S)','Nilofer (B+S)','Pramila (S)','Ayaz (B+S)','Bina (B+S)','Rahul (B+S)','Nehal (B+S)','Jyotinath (B)','Binaji (B)','Nusrat (B+S)','Anuradha Shinde (B+S)','Hamida (B+S)','Bhakti Panchal (B)']},
+    {tier:'5–10K', people:['Aarti (B+S)','Devangi (B)','Pramila (B)','Raieshwari (B)','Tripti (B)','Vidya (B)','Saba (B)','Shubham (B)','Rahul (B)','Sandeep (B)','Monica (B)','Shubhangi']},
+    {tier:'10–15K', people:['Kavita (B+S)','Avni (S)','Anitashil (B)','Preksha (B)','Mina ji (B)','Wini (B)']},
+    {tier:'15–25K', people:['Avni (B)','Vidya Sion (B)','Ritika']},
+    {tier:'Above 25K', people:['Jyoti Mandhare (B)','Javed Ali (B)']}
   ]},
   {name:'Makeup', color:'#A3365A', tiers:[
     {tier:'1–2K', people:['Manisha (S)','Situ (S)','Sayyam (S)','Villapa (S)','Jheel (S)','Isha (S)','Babita (S)','Shifa (S)','Pinki (S)','Poonam (S)','Hayat (S)','Rika (S)','Taira (S)','Sapna (S)','Shruti (S)','Sana (S)','Priya (S)','Karishma','Madhu','Payal']},
     {tier:'2–5K', people:['Nisha (B+S)','Ishani (B+S)','Kajal (B+S)','Shivani (B+S)','Shirin (S)','Pramila (B+S)','Isha (B)','Meenal (B+S)','Shifa (B)','Devanshi (B+S)','Ashwini (B+S)','Anuradha (B+S)']},
-    {tier:'5–10K', people:['Shirin (B)','Bharti (B)','Shivani (B)']}
+    {tier:'5–10K', people:['Shirin (B)','Bharti (B)','Shivani (B)','Kiran (B)']}
   ]},
   {name:'Drappist + HA', color:'#0C447C', tiers:[
-    {tier:'', people:['Lata','Mini','Babita','Devangi','Jyotinath','Khushboo','Nilofer','Hayat','Pramila','Poonam','Siddhi','Wini','Vidya','Hetal','Shubhangi','Avni Dombivali','Poonam Dombivali']}
+    {tier:'', people:['Lata','Mini','Babita','Devangi','Jyotinath','Khushboo','Nilofer','Hayat','Pramila','Poonam','Siddhi','Wini','Vidya','Hetal','Avni Dombivali','Poonam Dombivali']}
   ]},
   {name:'Drappist', color:'#0F7A6E', tiers:[
     {tier:'', people:['Tejas','Alpa','Pallavi','Kiran','Sapna Bengali draping']}
@@ -2255,6 +2280,10 @@ function syncNow(){
       showSyncOverlay('Synced! '+bookings.length+' bookings · '+withPdf2+' PDFs · '+ver+(jumped?' — showing '+new Date(vy,vm,1).toLocaleDateString('en-IN',{month:'long',year:'numeric'}):''),'ok');
       resetSyncBtn();
       setLastSyncOk();
+      // Sync itself is now fast (no PDF building). Kick off quote-building in the
+      // BACKGROUND so it never holds up the sync, then quietly pull the new
+      // quote links in once it's done.
+      buildQuotesInBackground();
     })
     .catch(function(err){
       hideSyncOverlay();
@@ -2270,6 +2299,24 @@ function resetSyncBtn(){
   var btn=document.getElementById('sync-btn');
   btn.innerHTML='<i class="ti ti-refresh" style="font-size:14px" aria-hidden="true"></i><span>Sync data</span>';
   btn.disabled=false;
+}
+// Build any missing quotation PDFs in the background (not blocking the sync).
+// Guarded so overlapping syncs don't stack requests; when it finishes it pulls
+// just the fresh quote links in and re-renders — no full reload, no spinner.
+var _bgQuoteRunning=false;
+function buildQuotesInBackground(){
+  if(!gasUrl||_bgQuoteRunning)return;
+  _bgQuoteRunning=true;
+  reliableGet(gasUrl+'?action=backfillQuotations').then(function(res){
+    _bgQuoteRunning=false;
+    var built=res&&res.results?(res.results.updated||0):0;
+    if(!built)return; // nothing new was built — leave the view as is
+    // Pull the new quote URLs in quietly (this call does NOT rebuild quotes)
+    reliableGet(gasUrl).then(function(data){
+      if(data&&data.ok&&data.avail){rebuildAllotmentsFromServer(data.avail);renderCal();updateSidebar();}
+      toast(built+' quotation'+(built>1?'s':'')+' ready');
+    }).catch(function(){});
+  }).catch(function(){ _bgQuoteRunning=false; });
 }
 function showSyncOverlay(msg,tp){
   var ov=document.getElementById('sync-overlay');if(!ov)return;
@@ -2909,14 +2956,14 @@ function renderCurrentAllotments(artist,ds,myAllots){
           +' <a href="javascript:void(0)" onclick="refreshQuotation(\''+(role||'MA')+'\',\''+artist.replace(/'/g,"\\'")+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\',\''+ds+'\',\''+locEsc+'\',\''+(al.quotationUrl||'')+'\')" style="font-size:10px;font-weight:700;color:#0F9B8E">🔄 Check</a>';
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:'+roleColor+'14;border:1.5px solid '+roleColor+'44;border-radius:9px;padding:7px 10px;margin-bottom:6px">'
         +'<div style="flex:1"><div style="font-size:11.5px;color:#333;font-weight:600;line-height:1.4">'+esc(al.note)+'</div>'+quoteLink+'</div>'
-        +'<button onclick="removeOneAllotment(\''+artist.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\')" style="flex-shrink:0;width:22px;height:22px;border-radius:6px;background:#fff;border:1.5px solid '+roleColor+'55;color:'+roleColor+';font-size:12px;font-weight:800;cursor:pointer;line-height:1">✕</button>'
+        +'<button onclick="removeOneAllotment(\''+artist.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\',\''+(al.note||'').replace(/'/g,"\\'")+'\')" style="flex-shrink:0;width:22px;height:22px;border-radius:6px;background:#fff;border:1.5px solid '+roleColor+'55;color:'+roleColor+';font-size:12px;font-weight:800;cursor:pointer;line-height:1">✕</button>'
         +'</div>';
     }).join('');
 }
 
-function removeOneAllotment(artist,ds,bride,eventNo){
-  removeAllotment(artist,ds,bride,eventNo);
-  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist,date:ds,eventKey:bride+' — '+eventNo})});
+function removeOneAllotment(artist,ds,bride,eventNo,note){
+  removeAllotment(artist,ds,bride,eventNo,note);
+  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist,date:ds,eventKey:(note||(bride+' — '+eventNo))})});
   if(!getAllotments(artist,ds).length) clearSlotsForArtistDate(artist,ds); // drop the auto RT-block once they're free again
   var myAllots=getAllotments(artist,ds);
   renderCurrentAllotments(artist,ds,myAllots);
@@ -3072,7 +3119,7 @@ function confirmAllot(role){
   var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+role;
   setAllotment(artist,activeDate,bride,eventNo,noteText);
   addRTBlockForArtist(artist,activeDate,allotBride?allotBride.readyTime:'');
-  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:bride+' — '+eventNo})});
+  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:noteText})});
   renderCal();updateSidebar();refreshOpenPanels(artist);
   toast('Allotted as '+role+(allotBride?' for '+allotBride.bride:''));
   if(ALLOT_FORM_LINKS[role]){
@@ -3126,7 +3173,7 @@ function refreshQuotation(role, artist, bride, eventNo, ds, location, oldUrl){
     if(!data.ok){toast('Refresh failed: '+(data.error||'unknown'));return;}
     setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url, data.sig);
     var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
-    if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:(bride||'')+' — '+(eventNo||''),quotationUrl:data.url})});
+    if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:existing.note,quotationUrl:data.url})});
     renderCal();updateSidebar();refreshOpenPanels(artist);
     if(data.foundResponse){
       toast(data.emailed?('📧 Updated quotation emailed to '+artist):'📄 Quotation updated with full form details');
@@ -3176,7 +3223,7 @@ function sendQuotationToServer(role, artist, bride, eventNo, eventName, ds, loca
     if(!data.ok){console.warn('Quotation generation failed:',data.error);return;}
     setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url, data.sig);
     var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
-    if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:(bride||'')+' — '+(eventNo||''),quotationUrl:data.url})});
+    if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:existing.note,quotationUrl:data.url})});
     renderCal();updateSidebar();refreshOpenPanels(artist);
     toast(data.emailed?('📧 Quotation emailed to '+artist+' ('+data.email+')'):('📄 Quotation created — no email on file for '+artist));
   }).catch(function(err){
@@ -3333,12 +3380,12 @@ function confirmSidersRole(role){
   if(existing && existing.a.artist!==artist){
     removeAllotment(existing.a.artist,activeDate,bride,eventNo,existing.a.note);
     if(!getAllotments(existing.a.artist,activeDate).length)clearSlotsForArtistDate(existing.a.artist,activeDate);
-    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist:existing.a.artist,date:activeDate,eventKey:bride+' — '+eventNo})});
+    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist:existing.a.artist,date:activeDate,eventKey:existing.a.note})});
   }
   var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+role+' — Siders ('+count+'): '+label;
   setAllotment(artist,activeDate,bride,eventNo,noteText);
   addRTBlockForArtist(artist,activeDate,allotBride?allotBride.readyTime:'');
-  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:bride+' — '+eventNo})});
+  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:noteText})});
   renderCal();updateSidebar();refreshOpenPanels(artist);renderSiderGroupsForRoleSection();renderAllotDialogSummary();
   toast((existing?'Re-allotted ':'Allotted ')+role+' \u2014 '+label);
   if(ALLOT_FORM_LINKS[role]){ showAllotFormLink(role); } else { showModalSection('role'); }
@@ -3591,8 +3638,16 @@ function renderBookingBlock(b, ds){
     return '<div style="font-size:10.5px;color:#B08900;margin:0 0 5px 3px">⛔ Blocked all day (no RT set)'+editLink+'</div>';
   }
 
+  // Match saved allotments (incl. manually-made siders) to this booking by
+  // bride + event, compared LOOSELY (case/space-insensitive) — the same way the
+  // server matches. An exact === check silently dropped siders whenever the
+  // RESPONSES text drifted even slightly on an update (capitalisation, an extra
+  // space) or the event's date shifted; matching on bride+event keeps them
+  // attached to their event regardless.
+  var _ln=function(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,' ');};
+  var _le=function(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,'');};
   var matchingAllots=Object.keys(allotments).map(function(k){return allotments[k];}).filter(function(a){
-    return a.date===ds && a.bride===b.bride && a.eventNo===b.eventNo;
+    return _ln(a.bride)===_ln(b.bride) && _le(a.eventNo)===_le(b.eventNo);
   });
 
   // Siders-tagged allotments (extra client, e.g. bride's mom) get shown in

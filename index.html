@@ -152,9 +152,9 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .how-text b{color:#0C447C}
 .how-text code{background:#fff;border:0.5px solid #B5D4F4;border-radius:4px;padding:1px 5px;font-size:11px;font-family:monospace;color:#0C447C}
 
-.note-modal-wrap{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:999;display:none;align-items:center;justify-content:center}
+.note-modal-wrap{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:999;display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 12px}
 .note-modal-wrap.open{display:flex}
-.note-modal{background:#fff;border-radius:16px;padding:20px;width:300px;box-shadow:0 8px 40px rgba(0,0,0,0.14)}
+.note-modal{background:#fff;border-radius:16px;padding:20px;width:300px;max-width:100%;max-height:none;box-shadow:0 8px 40px rgba(0,0,0,0.14);margin:auto}
 .note-modal h3{font-size:15px;font-weight:700;color:#222;margin-bottom:4px}
 .note-modal-sub{font-size:11px;color:#999;margin-bottom:12px}
 .note-modal textarea{width:100%;border-radius:10px;border:1.5px solid #ECECEC;padding:10px;font-size:13px;resize:none;height:70px;font-family:inherit}
@@ -475,7 +475,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 var SS_ID   = '';        // ← leave blank: script uses active spreadsheet
 // Bump this whenever you paste updated code, so the roster can show you which
 // version is actually live and you can confirm a deploy took effect.
-var SCRIPT_VERSION = 'v12-fast-sync';
+var SCRIPT_VERSION = 'v13-shared-quote-pdf';
 var RESP_SHEET  = 'Responses';
 var AVAIL_SHEET = 'Artist Availability';
 var DATES_SHEET = 'BOOKING_DATES';
@@ -1065,7 +1065,7 @@ function scheduledMaintenance() {
   var ss = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
   ensureSheets(ss);
   try { rebuildBookingDates(); } catch(e1) { Logger.log('scheduledMaintenance rebuildBookingDates: ' + e1); }
-  try { autoBackfillQuotations(ss, 0); } catch(e2) { Logger.log('scheduledMaintenance autoBackfillQuotations: ' + e2); }
+  try { autoBackfillQuotations(ss, 20); } catch(e2) { Logger.log('scheduledMaintenance autoBackfillQuotations: ' + e2); }
 }
 
 // ── doGet — returns JSON for the tracker ──────────
@@ -1138,10 +1138,10 @@ function parseDateList(sVal) {
 function autoBackfillQuotations(ss, limit) {
   var availSheet = ss.getSheetByName(AVAIL_SHEET);
   var aData = availSheet.getDataRange().getValues();
-  var results = { processed: 0, updated: 0, skipped: 0, noMatch: 0, sigBackfilled: 0, errors: [] };
+  var results = { processed: 0, updated: 0, skipped: 0, noMatch: 0, sigBackfilled: 0, errors: [], quotaHit: false };
 
   ['MA', 'HA'].forEach(function(role) {
-    if (limit &amp;&amp; results.updated &gt;= limit) return;
+    if ((limit &amp;&amp; results.updated &gt;= limit) || results.quotaHit) return;
     var sheetId = role === 'HA' ? HA_RESPONSE_SHEET_ID : MA_RESPONSE_SHEET_ID;
     var tabName = role === 'HA' ? HA_RESPONSE_TAB : MA_RESPONSE_TAB;
     if (!sheetId) return;
@@ -1215,27 +1215,13 @@ function autoBackfillQuotations(ss, limit) {
         matchRowIdxs = matchRowIdxs.filter(function(v, i, arr) { return arr.indexOf(v) === i; });
       }
       if (!matchRowIdxs.length) { results.noMatch++; continue; }
-      matchRowIdxs.forEach(function(matchRowIdx) {
 
-      var existingUrl = String(aData[matchRowIdx][5] || '');
-      var existingSig = String(aData[matchRowIdx][7] || ''); // col H — fingerprint baked into the CURRENT pdf
-
-      var noteText = String(aData[matchRowIdx][3] || '');
-      var parsedNote = parseAllotNoteServer(noteText);
-      var allotDate = normDate(aData[matchRowIdx][1]);
-      var booking = findBookingDetails(ss, parsedNote.bride, parsedNote.eventNo);
-
-      var qData = {
-        artist: artistName,
-        role: role,
-        bride: parsedNote.bride || clientName,
-        eventNo: parsedNote.eventNo || '',
-        eventName: booking ? booking.eventName : '',
-        date: allotDate,
-        location: booking ? booking.location : rv(r, map, 'location'),
-        readyTime: booking ? booking.readyTime : ''
-      };
-      qData.formResponse = {
+      // The form response is ONE quotation covering all its dates, so build the
+      // PDF at most ONCE and point every matched date at the same file. This is
+      // what "same quotation for multiple dates" means, and it avoids running
+      // Google's HTML→PDF conversion once per date (which quickly hits the daily
+      // "Service invoked too many times: conversion" quota).
+      var responseFR = {
         serviceFor:     rv(r, map, 'serviceFor'),
         siderCount:     rv(r, map, 'siderCount'),
         eventCount:     rv(r, map, 'eventCount'),
@@ -1251,25 +1237,35 @@ function autoBackfillQuotations(ss, limit) {
         additionalInfo: rv(r, map, 'additionalInfo'),
         paymentType:    rv(r, map, 'paymentType')
       };
-      var newSig = hashFormResponse(qData.formResponse);
+      var newSig = hashFormResponse(responseFR);
+      var sharedUrl = null; // built lazily, reused for every date on this form
+      function ensureSharedPdf(sampleRowIdx) {
+        if (sharedUrl !== null) return sharedUrl;
+        var pNote = parseAllotNoteServer(String(aData[sampleRowIdx][3] || ''));
+        var bk = findBookingDetails(ss, pNote.bride, pNote.eventNo);
+        var qData = {
+          artist: artistName, role: role,
+          bride: pNote.bride || clientName, eventNo: pNote.eventNo || '',
+          eventName: bk ? bk.eventName : '', date: normDate(aData[sampleRowIdx][1]),
+          location: bk ? bk.location : rv(r, map, 'location'),
+          readyTime: bk ? bk.readyTime : '', formResponse: responseFR
+        };
+        var pdfBlob = buildQuotationPdfBlob(qData); // <-- the ONE conversion
+        var folder = getOrCreateQuotationsFolder();
+        var file = folder.createFile(pdfBlob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        sharedUrl = 'https://drive.google.com/file/d/' + file.getId() + '/view';
+        return sharedUrl;
+      }
 
-      // Case 1: nothing submitted yet for this booking — leave exactly as
-      // is (don't touch the URL/sig either way). This is what keeps a
-      // genuinely-unfilled booking, like a placeholder generated before the
-      // artist's form was submitted, showing "Fill Quotation" in the UI.
+      matchRowIdxs.forEach(function(matchRowIdx) {
+      if (results.quotaHit) return; // Google's daily conversion quota is spent — stop trying
+      var existingUrl = String(aData[matchRowIdx][5] || '');
+      var existingSig = String(aData[matchRowIdx][7] || ''); // col H — fingerprint baked into the CURRENT pdf
+
+      // Case 1: nothing submitted yet — leave as is.
       if (existingUrl && newSig === '') { results.skipped++; return; }
-
-      // Case 2: a quotation URL exists from BEFORE the QuoteDataSig column
-      // was introduced (existingSig is blank), but real form data now
-      // matches it. Rather than regenerating a PDF that's almost certainly
-      // already correct — which would just churn Drive for no reason —
-      // quietly backfill the sig so the UI correctly shows "View PDF" for
-      // it going forward, without altering the existing file.
-      //
-      // Exception: artistName+clientName pairs known to have been genuinely
-      // blank (not just untracked) must NOT take this shortcut — their
-      // existing PDF really is just the placeholder, so it needs a full
-      // regeneration once real data shows up, not just a sig stamp.
+      // Case 2: legacy URL without a sig, data matches — just stamp the sig.
       var isKnownGenuinelyBlank = /shubham/i.test(artistName) && /priya\s*hadawale/i.test(clientName)
         && respDateNormTop && /-(17|18)$/.test(respDateNormTop);
       if (existingUrl && existingSig === '' && newSig !== '' && !isKnownGenuinelyBlank) {
@@ -1278,35 +1274,28 @@ function autoBackfillQuotations(ss, limit) {
         results.sigBackfilled++;
         return;
       }
-
-      // Case 3: already up to date (sig matches what's submitted) — skip.
+      // Case 3: already up to date — skip.
       if (existingUrl && newSig === existingSig) { results.skipped++; return; }
 
-      // Anything else (no URL yet, or data has genuinely changed since the
-      // sig was last set) falls through to generate/regenerate below.
-
       try {
-        // Replacing a stale placeholder — trash the old file so Drive
-        // doesn't accumulate obsolete "Awaiting form submission" PDFs.
         if (existingUrl) {
           var oldMatch = existingUrl.match(/[-\w]{25,}/);
           if (oldMatch) { try { DriveApp.getFileById(oldMatch[0]).setTrashed(true); } catch(exOld) {} }
         }
-        var pdfBlob = buildQuotationPdfBlob(qData);
-        var folder = getOrCreateQuotationsFolder();
-        var file = folder.createFile(pdfBlob);
-        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-        var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
+        var url = ensureSharedPdf(matchRowIdx); // builds once, then reused
         availSheet.getRange(matchRowIdx + 1, 6).setValue(url);
         availSheet.getRange(matchRowIdx + 1, 8).setValue(newSig);
         aData[matchRowIdx][5] = url;
         aData[matchRowIdx][7] = newSig;
         results.updated++;
       } catch(errB) {
+        if (/too many times/i.test(String(errB))) { results.quotaHit = true; }
         results.errors.push(artistName + '/' + clientName + ': ' + errB);
       }
       }); // matchRowIdxs.forEach
+      if (results.quotaHit) break; // don't keep looping responses once quota is gone
     }
+    if (results.quotaHit) return; // stop this role (can't break out of a forEach)
   });
 
   return results;
@@ -1549,7 +1538,7 @@ function doGet(e) {
     try {
       var ss4 = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
       ensureSheets(ss4);
-      var results = autoBackfillQuotations(ss4, 0); // 0 = no limit, catch up on everything
+      var results = autoBackfillQuotations(ss4, 10); // cap per run so one call can't exhaust Google's daily PDF quota
       return jsonOut(e, { ok: true, results: results });
     } catch(err) {
       return jsonOut(e, { ok: false, error: String(err) });
@@ -1767,6 +1756,10 @@ function doPost(e) {
       <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">No. of siders (extra people)</div>
       <input id="siders-count" type="number" min="1" value="1" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:12px;font-family:inherit">
       <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">Artist doing their look — confirm as</div>
+      <label style="display:flex;align-items:center;gap:8px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px;padding:8px 11px;margin-bottom:10px;cursor:pointer;font-size:12px;font-weight:600;color:#0F7A6E">
+        <input type="checkbox" id="siders-all-events" checked style="width:16px;height:16px;cursor:pointer">
+        Apply to <b>all events</b> of this bride (so no event gets missed)
+      </label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button onclick="confirmSidersRole('MA')" style="height:48px;border-radius:12px;background:#A3365A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">MA</button>
         <button onclick="confirmSidersRole('HA')" style="height:48px;border-radius:12px;background:#6B3A8A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">HA</button>
@@ -2411,6 +2404,10 @@ function autoSyncOnLoad(){
       if(data.avail){var __nonAllot=[];data.avail.forEach(function(r){if(!r.artist||!r.date)return;if(r.status==='ALLOT')return;__nonAllot.push(r);});__nonAllot.forEach(function(r){avail[akey(r.artist,r.date)]={status:r.status,note:r.note||''};});save();rebuildAllotmentsFromServer(data.avail);}if(data.drafts)mergeDraftsFromServer(data.drafts);
       renderCal();updateSidebar();updateConnectionStatus(true);
       setLastSyncOk();
+      // Keep building any quotations still missing (e.g. after a daily-limit
+      // reset) even on the passive background poll — so they fill in on their
+      // own without anyone pressing Sync.
+      buildQuotesInBackground();
     })
     .catch(function(err){
       console.warn('Auto-sync on load failed, showing last cached data:',err);
@@ -2979,6 +2976,8 @@ function showModalSection(s){
   document.getElementById('allot-role-section').style.display=s==='role'?'':'none';
   document.getElementById('allot-siders-section').style.display=s==='siders'?'':'none';
   document.getElementById('allot-link-section').style.display=s==='link'?'':'none';
+  // Always land at the top of the newly-shown section (the modal can get tall).
+  var wrap=document.getElementById('note-modal-wrap'); if(wrap)wrap.scrollTop=0;
 }
 
 var ALLOT_FORM_LINKS={
@@ -3170,7 +3169,11 @@ function refreshQuotation(role, artist, bride, eventNo, ds, location, oldUrl){
     +'&readyTime='+encodeURIComponent(readyTime||'')
     +'&oldUrl='+encodeURIComponent(oldUrl||'');
   reliableGet(gasUrl+'?'+qs).then(function(data){
-    if(!data.ok){toast('Refresh failed: '+(data.error||'unknown'));return;}
+    if(!data.ok){
+      var em=String(data.error||'unknown');
+      if(/too many times/i.test(em)){ toast("Google's daily PDF limit is reached for today — quotations will build again tomorrow. Already-made PDFs still open fine."); return; }
+      toast('Refresh failed: '+em); return;
+    }
     setAllotmentQuotationUrl(artist, ds, bride||'', eventNo||'', data.url, data.sig);
     var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
     if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:existing.note,quotationUrl:data.url})});
@@ -3375,19 +3378,42 @@ function confirmSidersRole(role){
   var label=document.getElementById('siders-names').value.trim();
   if(!label){toast("Type a sider group name first (e.g. Groom Siders)");return;}
   var bride=allotBride?allotBride.bride:'', eventNo=allotBride?allotBride.eventNo:'';
-  // Re-allot = replace: if this group already has an artist in this role, drop them first.
-  var existing=findSiderAllot(activeDate,bride,eventNo,label,role);
-  if(existing && existing.a.artist!==artist){
-    removeAllotment(existing.a.artist,activeDate,bride,eventNo,existing.a.note);
-    if(!getAllotments(existing.a.artist,activeDate).length)clearSlotsForArtistDate(existing.a.artist,activeDate);
-    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist:existing.a.artist,date:activeDate,eventKey:existing.a.note})});
+  var allEventsEl=document.getElementById('siders-all-events');
+  var applyAll=!!(allEventsEl&&allEventsEl.checked)&&!!bride;
+
+  // Build the list of (date,eventNo) targets: just this event, or every event
+  // of this bride — so a sider group is never left off one of the events.
+  var targets=[];
+  if(applyAll){
+    var seen={};
+    bookings.forEach(function(b){
+      if(String(b.bride||'').trim().toLowerCase()!==String(bride).trim().toLowerCase())return;
+      var ds=bookingDs(b); var key=(b.eventNo||'')+'|'+ds;
+      if(seen[key])return; seen[key]=1;
+      targets.push({date:ds,eventNo:b.eventNo});
+    });
   }
-  var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+role+' — Siders ('+count+'): '+label;
-  setAllotment(artist,activeDate,bride,eventNo,noteText);
-  addRTBlockForArtist(artist,activeDate,allotBride?allotBride.readyTime:'');
-  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:noteText})});
+  if(!targets.length) targets=[{date:activeDate,eventNo:eventNo}];
+
+  var done=0;
+  targets.forEach(function(t){
+    // Re-allot = replace: if this group already has an artist in this role on
+    // this event, drop them first.
+    var existing=findSiderAllot(t.date,bride,t.eventNo,label,role);
+    if(existing && existing.a.artist!==artist){
+      removeAllotment(existing.a.artist,t.date,bride,t.eventNo,existing.a.note);
+      if(!getAllotments(existing.a.artist,t.date).length)clearSlotsForArtistDate(existing.a.artist,t.date);
+      if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist:existing.a.artist,date:t.date,eventKey:existing.a.note})});
+    }
+    var noteText=bride+' — '+t.eventNo+' — '+role+' — Siders ('+count+'): '+label;
+    setAllotment(artist,t.date,bride,t.eventNo,noteText);
+    addRTBlockForArtist(artist,t.date,'');
+    if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:t.date,status:'ALLOT',note:noteText,eventKey:noteText})});
+    done++;
+  });
+
   renderCal();updateSidebar();refreshOpenPanels(artist);renderSiderGroupsForRoleSection();renderAllotDialogSummary();
-  toast((existing?'Re-allotted ':'Allotted ')+role+' \u2014 '+label);
+  toast('Allotted '+role+' — '+label+(applyAll?(' across '+done+' event'+(done>1?'s':'')):''));
   if(ALLOT_FORM_LINKS[role]){ showAllotFormLink(role); } else { showModalSection('role'); }
 }
 

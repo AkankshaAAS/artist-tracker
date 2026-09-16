@@ -429,7 +429,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 
       <div class="set-card" style="border-color:#D6E9F8">
         <div class="set-card-title"><i class="ti ti-file-invoice" style="font-size:18px;color:#0C447C" aria-hidden="true"></i>Backfill quotations for already-filled forms</div>
-        <div class="set-card-sub">If artists already submitted their MA/HA form before this feature existed, run this once to generate their quotation PDFs retroactively. Safe to run more than once — it skips anything that already has a quotation, and does <b>not</b> send emails (so old artists won't get surprise mail for past events).</div>
+        <div class="set-card-sub">Finds every missing quotation and generates it — searches all MA/HA form responses, builds a PDF for anything that doesn't have one yet, and keeps going in rounds by itself until nothing's left (or Google's daily PDF limit is hit, in which case the rest picks up automatically tomorrow). Safe to run more than once — it skips anything that already has a quotation, and does <b>not</b> send emails (so old artists won't get surprise mail for past events).</div>
         <button onclick="runBackfillQuotations()" id="backfill-btn" style="height:44px;padding:0 20px;border-radius:10px;background:#0C447C;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer">🔄 Generate missing quotations now</button>
         <div id="backfill-status" style="margin-top:10px"></div>
       </div>
@@ -465,7 +465,9 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
         <div class="how-title"><i class="ti ti-code" style="font-size:18px" aria-hidden="true"></i>Apps Script — Full Updated Code</div>
         <div style="font-size:12px;color:#185FA5;margin-bottom:10px;line-height:1.6">
           Your sheet format is: <code style="background:#fff;border:1px solid #B5D4F4;border-radius:4px;padding:2px 6px;font-size:11px">Event name - pre wedding, Makeup by - Team, Location - Igatpuri, RT - 12 PM</code><br>
-          Replace your entire Apps Script with this. It reads the label-based format (Event name -, Location -, RT -) and sends <b>eventName, location, readyTime</b> to the tracker.
+          Replace your entire Apps Script with this. It reads the label-based format (Event name -, Location -, RT -) and sends <b>eventName, location, readyTime</b> to the tracker.<br>
+          <b>v14 update:</b> Fill/Refresh Quotation now applies the same PDF to every date this artist is booked for this client (e.g. a 12/13/14 multi-day booking) in one go, instead of only the date you clicked — and it now builds the PDF once per booking instead of once per date, so it burns through Google's daily PDF quota far more slowly.<br>
+          <b>v15 update:</b> "Generate missing quotations now" keeps calling itself in the background until it's actually found and built every missing quotation (or the daily PDF limit is hit), instead of stopping after one small batch. And when an artist has two+ events for the same client on the exact same day with no way to tell which is which, it now generates the quotation for that artist+date anyway (instead of skipping it forever) — one quotation per artist+date, irrespective of which event that day it's under.
         </div>
         <div style="background:#1e1e2e;border-radius:10px;padding:14px;font-family:monospace;font-size:11px;color:#cdd6f4;overflow-x:auto;white-space:pre;line-height:1.7">// ═══════════════════════════════════════════════════
 // ARTIST AVAILABILITY TRACKER — Apps Script
@@ -475,7 +477,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 var SS_ID   = '';        // ← leave blank: script uses active spreadsheet
 // Bump this whenever you paste updated code, so the roster can show you which
 // version is actually live and you can confirm a deploy took effect.
-var SCRIPT_VERSION = 'v13-shared-quote-pdf';
+var SCRIPT_VERSION = 'v15-fullscan-anydate-quotes';
 var RESP_SHEET  = 'Responses';
 var AVAIL_SHEET = 'Artist Availability';
 var DATES_SHEET = 'BOOKING_DATES';
@@ -605,6 +607,35 @@ function eventKeyMatchesNote(eventKey, note) {
   var ekRole = roleIdFromNote(eventKey);
   if (ekRole) return ekRole === roleIdFromNote(note);
   return true;
+}
+
+// Finds every ALLOT row for this artist on this same bride+eventNo (+role) —
+// i.e. every OTHER date this same artist is booked for the SAME client, when
+// a booking spans several dates (12, 13, 14...) with one roster row per
+// date. Used so filling/refreshing a quotation on ANY one of those dates
+// applies the same PDF to all of them in one shot, instead of leaving the
+// "remaining dates" stuck on Fill Quotation until the next background
+// backfill run. Returns null (not []) when nothing at all matches — including
+// the triggering row itself — so callers can fall back to old single-row
+// behaviour instead of silently updating zero rows.
+function findSiblingAllotRows(avData, artistName, bride, eventNo, role) {
+  var artistLc = String(artistName || '').trim().toLowerCase();
+  var out = [];
+  for (var i = 1; i &lt; avData.length; i++) {
+    if (String(avData[i][0]).trim().toLowerCase() !== artistLc) continue;
+    if (String(avData[i][2]) !== 'ALLOT') continue;
+    var note = String(avData[i][3] || '');
+    var parsed = parseAllotNoteServer(note);
+    if (!namesLooselyMatch(parsed.bride, bride)) continue;
+    if (eventNo &amp;&amp; parsed.eventNo.trim().toLowerCase() !== String(eventNo).trim().toLowerCase()) continue;
+    if (role) {
+      var rid = roleIdFromNote(note);
+      var noteRole = rid ? rid.split('|').pop() : '';
+      if (noteRole &amp;&amp; noteRole !== role) continue;
+    }
+    out.push(i); // 0-based index into avData — sheet row is i + 1
+  }
+  return out.length ? out : null;
 }
 
 function findFormResponse(role, artistName, clientName, eventDateStr) {
@@ -1121,11 +1152,16 @@ function hashFormResponse(fr) {
 // emailAllQuotations below), so old/completed events don't suddenly spam
 // artists with mail the moment this runs.
 //
-// `limit` bounds how many NEW quotations it will generate in one call —
-// pass a small number (e.g. 15) when calling this quietly during every
-// regular sync so page loads stay fast; pass 0 ("no limit") for the manual
-// "Generate missing quotations now" button, which should catch up on
-// everything in one go.
+// `limit` bounds how many NEW quotations it will generate in ONE call — kept
+// small (10, set where this is called from doGet) so a single request stays
+// well inside Apps Script's execution time and doesn't burn the whole daily
+// PDF quota in one shot. The quiet background call (after every sync) makes
+// one such capped call and stops there. The manual "Generate missing
+// quotations now" button instead calls this same capped action repeatedly
+// from the browser (see runBackfillQuotations) until a round generates
+// nothing new or the quota is hit — so it still finds and builds
+// EVERY missing quotation, just across several small calls instead of one
+// unbounded one.
 // Split a form's Event Date answer into a list of yyyy-MM-dd dates. The ops
 // manager can type several dates for one quotation, e.g. "19/10/2026,20/10/2026".
 function parseDateList(sVal) {
@@ -1201,14 +1237,26 @@ function autoBackfillQuotations(ss, limit) {
           if (onDate.length === 1) {
             matchRowIdxs.push(onDate[0]);
           } else if (onDate.length &gt; 1) {
-            // Two events on the SAME day — date alone can't separate them; use
-            // an "Event No" answer if the form has one, else skip (don't guess).
+            // Two+ events on the SAME day for this same artist+bride — date
+            // alone can't separate them. Try an "Event No" answer if the
+            // form has one...
             var respEventNo = rv(r, map, 'eventNoLabel');
+            var pinned = null;
             if (respEventNo) {
               for (var dnum = 0; dnum &lt; onDate.length; dnum++) {
                 var candNote = String(aData[onDate[dnum]][3] || '');
-                if (parseAllotNoteServer(candNote).eventNo.toLowerCase().indexOf(respEventNo.toLowerCase()) !== -1) { matchRowIdxs.push(onDate[dnum]); break; }
+                if (parseAllotNoteServer(candNote).eventNo.toLowerCase().indexOf(respEventNo.toLowerCase()) !== -1) { pinned = onDate[dnum]; break; }
               }
+            }
+            if (pinned !== null) {
+              matchRowIdxs.push(pinned);
+            } else {
+              // ...but if there's still no way to tell which specific event
+              // this quotation belongs to, generate it for the artist on
+              // this DATE regardless of which event that day it's under —
+              // one quotation per artist+date, irrespective of the events
+              // on that day, rather than leaving all of them missing.
+              onDate.forEach(function(ci) { matchRowIdxs.push(ci); });
             }
           }
         });
@@ -1367,24 +1415,59 @@ function doGet(e) {
         additionalInfo: e.parameter.additionalInfo || ''
       };
 
-      // On refresh, remove the old quotation file first so Drive doesn't fill up with stale versions
-      if (action === 'refreshQuotation' &amp;&amp; e.parameter.oldUrl) {
-        var oldIdMatch = String(e.parameter.oldUrl).match(/[-\w]{25,}/);
-        if (oldIdMatch) { try { DriveApp.getFileById(oldIdMatch[0]).setTrashed(true); } catch(ex) {} }
-      }
+      // Every OTHER date this same artist is ALLOT'd to this same client —
+      // i.e. the "12, 13, 14" of a multi-day booking. null means we
+      // couldn't find any matching row (including this one) by note-parsing,
+      // in which case we fall back to only touching this one row, same as
+      // the old behaviour.
+      var avSheet = ss2.getSheetByName(AVAIL_SHEET);
+      var avData = avSheet.getDataRange().getValues();
+      var siblingIdxs = findSiblingAllotRows(avData, qData.artist, qData.bride, qData.eventNo, qData.role);
 
+      // Build the PDF ONCE — before trashing any old files or touching any
+      // sheet cells — so that if this hits Google's daily HTML→PDF
+      // "conversion" quota, every row is left exactly as it was instead of
+      // half-updated. This is also what keeps a multi-date booking down to
+      // ONE conversion call instead of one per date, which is what was
+      // burning through the daily quota fastest.
       var pdfBlob = buildQuotationPdfBlob(qData);
       var folder = getOrCreateQuotationsFolder();
       var file = folder.createFile(pdfBlob);
       file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       var url = 'https://drive.google.com/file/d/' + file.getId() + '/view';
 
+      // What actually went onto the PDF, fingerprinted — the SAME value
+      // gets stamped on every date below, so autoBackfillQuotations sees
+      // them all as already up to date instead of regenerating again.
+      var sigVal = hashFormResponse(mergeQuotationFields(qData.formResponse, qData.manual));
+
+      function trashOldFile(oldUrlStr) {
+        if (!oldUrlStr) return;
+        var m = String(oldUrlStr).match(/[-\w]{25,}/);
+        if (!m || m[0] === file.getId()) return;
+        try { DriveApp.getFileById(m[0]).setTrashed(true); } catch(exTrash) {}
+      }
+
+      if (siblingIdxs) {
+        siblingIdxs.forEach(function(idx) {
+          trashOldFile(avData[idx][5]); // that row's own existing QuotationUrl (col F)
+          avSheet.getRange(idx + 1, 6).setValue(url);     // QuotationUrl
+          avSheet.getRange(idx + 1, 8).setValue(sigVal);  // QuoteDataSig
+        });
+      } else {
+        // Couldn't find this booking by note-parsing (shouldn't normally
+        // happen) — fall back to trashing whatever the client told us was
+        // the current file for just this one row.
+        trashOldFile(e.parameter.oldUrl);
+      }
+
       var email = lookupArtistEmail(ss2, qData.artist);
       var emailed = false;
       // Honour noEmail=1 (always sent by the Fill Quotation modal — sending
       // there is a deliberate separate step, not automatic). Otherwise email
       // on the initial quotation, or on a refresh only if there's now a real
-      // form response to send.
+      // form response to send. One email covers the whole booking, however
+      // many dates it spans — not one per date.
       var shouldEmail = email &amp;&amp; !e.parameter.noEmail &amp;&amp; (action === 'quotation' || qData.formResponse);
       if (shouldEmail) {
         MailApp.sendEmail({
@@ -1401,57 +1484,7 @@ function doGet(e) {
         markQuotationEmailed(ss2, qData.artist, url);
       }
 
-      // Keep QuoteDataSig in step with what was just baked into the PDF —
-      // matches on artist + date + bride/eventNo prefix, same as doPost's
-      // upsert matcher. Without this, the next autoBackfillQuotations run
-      // would see an empty sig and regenerate this same PDF again once more.
-      //
-      // Sig is computed from the SAME merged (manual + real form) fields
-      // that actually went onto the PDF — not just the real form response —
-      // so a quotation that Simran filled in by hand (no artist form yet)
-      // still counts as "really filled" and shows View PDF, while a bare
-      // auto-generated placeholder (both manual and form empty, e.g. right
-      // after allotment) keeps sig blank and correctly still shows Fill
-      // Quotation.
-      var sigVal = '';
-      try {
-        sigVal = hashFormResponse(mergeQuotationFields(qData.formResponse, qData.manual));
-        var avSheet = ss2.getSheetByName(AVAIL_SHEET);
-        var avData = avSheet.getDataRange().getValues();
-        // Find the matching row by parsing each row's own note (bride +
-        // eventNo) and comparing loosely — same approach used everywhere
-        // else in this file (namesLooselyMatch / eventNo trim+lowercase)
-        // instead of requiring the note to start with an exact,
-        // character-for-character "bride — eventNo" string. An exact-prefix
-        // check silently finds nothing (no error, just no match) whenever
-        // the bride/eventNo text drifts even slightly between when the
-        // artist was allotted and when the quotation is filled — e.g. an
-        // extra space, different capitalization, or the Sales Sheet's bride
-        // name being re-synced — which is exactly what let the freshly
-        // computed sig here return correctly to the browser (so View PDF
-        // showed immediately) while silently never getting saved to the
-        // sheet, so the next sync/refresh pulled the still-blank value back
-        // and reverted the card to Fill Quotation.
-        var qEventKey = (qData.bride || '') + ' — ' + (qData.eventNo || '');
-        // Match on dateIso (yyyy-MM-dd), NOT qData.date — qData.date is
-        // DD/MM/YYYY (built for the Google Form prefill / PDF display) and
-        // normDate() always returns yyyy-MM-dd, so comparing against
-        // qData.date here silently matched nothing on every single call —
-        // the sig was computed and shown in the browser but never actually
-        // saved to the sheet, so the next sync always reverted the card
-        // back to "Fill Quotation". dateIso falls back to qData.date for
-        // any old cached page that hasn't picked up the dateIso param yet.
-        var matchDate = qData.dateIso || qData.date;
-        for (var si = 1; si &lt; avData.length; si++) {
-          if (String(avData[si][0]).trim().toLowerCase() !== String(qData.artist).trim().toLowerCase()) continue;
-          if (normDate(avData[si][1]) !== matchDate) continue;
-          if (!eventKeyMatchesNote(qEventKey, avData[si][3])) continue;
-          avSheet.getRange(si + 1, 8).setValue(sigVal);
-          break;
-        }
-      } catch(exSig) { Logger.log('sig persist: ' + exSig); }
-
-      return jsonOut(e, { ok: true, url: url, emailed: emailed, email: email || '', foundResponse: !!qData.formResponse, sig: sigVal });
+      return jsonOut(e, { ok: true, url: url, emailed: emailed, email: email || '', foundResponse: !!qData.formResponse, sig: sigVal, datesUpdated: siblingIdxs ? siblingIdxs.length : 1 });
     } catch(err) {
       return jsonOut(e, { ok: false, error: String(err) });
     }
@@ -2420,32 +2453,59 @@ function runBackfillQuotations(){
   var btn=document.getElementById('backfill-btn');
   var status=document.getElementById('backfill-status');
   btn.disabled=true;
-  btn.textContent='⏳ Working… this can take a minute for a lot of responses';
   status.innerHTML='';
-  reliableGet(gasUrl+'?action=backfillQuotations').then(function(data){
-    btn.disabled=false;
-    btn.textContent='🔄 Generate missing quotations now';
-    if(!data.ok){
-      status.innerHTML='<div style="padding:10px;background:#FFF1F3;border-radius:10px;color:#9B1A2F;font-size:13px;font-weight:600">Failed: '+esc(data.error||'unknown error')+'</div>';
-      return;
-    }
-    var r=data.results;
-    var lines='<div style="padding:12px;background:#EAF3DE;border-radius:10px;color:#27500A;font-size:13px;line-height:1.7">'
-      +'<b>Done!</b> Checked '+r.processed+' form response'+(r.processed!==1?'s':'')+'<br>'
-      +'✅ '+r.updated+' new quotation'+(r.updated!==1?'s':'')+' generated<br>'
-      +(r.sigBackfilled?'🔗 '+r.sigBackfilled+' older quotation'+(r.sigBackfilled!==1?'s':'')+' recognized as already filled (View PDF restored, nothing regenerated)<br>':'')
-      +'⏭️ '+r.skipped+' already had a quotation (skipped)<br>'
-      +(r.noMatch?'❓ '+r.noMatch+' had no matching allotment found<br>':'')
-      +(r.errors&&r.errors.length?'⚠️ '+r.errors.length+' error'+(r.errors.length!==1?'s':'')+' — check Apps Script logs<br>':'')
-      +'</div>';
-    status.innerHTML=lines;
-    if(r.updated>0||r.sigBackfilled>0){toast((r.updated+r.sigBackfilled)+' quotation(s) updated — refreshing…');autoSyncOnLoad();}
-  }).catch(function(err){
-    btn.disabled=false;
-    btn.textContent='🔄 Generate missing quotations now';
-    status.innerHTML='<div style="padding:10px;background:#FFF1F3;border-radius:10px;color:#9B1A2F;font-size:13px;font-weight:600">Request failed — check connection and try again</div>';
-    console.warn('backfill failed',err);
-  });
+  // The server caps each call at a small batch so one request can't blow
+  // past Apps Script's execution limit or the daily PDF quota — so this
+  // keeps calling it in rounds, folding in the totals, until a round finds
+  // nothing new left to build or the quota runs out. That's what makes this
+  // an actual "find and build everything missing" search, not just one
+  // capped batch.
+  var totals={processed:0,updated:0,skipped:0,noMatch:0,sigBackfilled:0,errors:[]};
+  var rounds=0;
+  function runRound(){
+    rounds++;
+    btn.textContent='⏳ Working… '+totals.updated+' generated so far';
+    reliableGet(gasUrl+'?action=backfillQuotations').then(function(data){
+      if(!data.ok){
+        btn.disabled=false;
+        btn.textContent='🔄 Generate missing quotations now';
+        status.innerHTML='<div style="padding:10px;background:#FFF1F3;border-radius:10px;color:#9B1A2F;font-size:13px;font-weight:600">Failed: '+esc(data.error||'unknown error')+'</div>';
+        return;
+      }
+      var r=data.results;
+      totals.processed+=r.processed||0;
+      totals.updated+=r.updated||0;
+      totals.skipped+=r.skipped||0;
+      totals.noMatch+=r.noMatch||0;
+      totals.sigBackfilled+=r.sigBackfilled||0;
+      if(r.errors&&r.errors.length)totals.errors=totals.errors.concat(r.errors);
+      var quotaHit=!!r.quotaHit;
+      var madeProgress=(r.updated>0||r.sigBackfilled>0);
+      // Keep going while this round actually built something new and the
+      // daily PDF quota isn't spent — stops on its own once a round comes
+      // back with nothing left to do, instead of always stopping at one batch.
+      if(!quotaHit&&madeProgress&&rounds<40){ runRound(); return; }
+      btn.disabled=false;
+      btn.textContent='🔄 Generate missing quotations now';
+      var lines='<div style="padding:12px;background:'+(quotaHit?'#FFF8EC':'#EAF3DE')+';border-radius:10px;color:'+(quotaHit?'#7A4E00':'#27500A')+';font-size:13px;line-height:1.7">'
+        +'<b>Done!</b> Checked '+totals.processed+' form response'+(totals.processed!==1?'s':'')+'<br>'
+        +'✅ '+totals.updated+' new quotation'+(totals.updated!==1?'s':'')+' generated<br>'
+        +(totals.sigBackfilled?'🔗 '+totals.sigBackfilled+' older quotation'+(totals.sigBackfilled!==1?'s':'')+' recognized as already filled (View PDF restored, nothing regenerated)<br>':'')
+        +'⏭️ '+totals.skipped+' already had a quotation (skipped)<br>'
+        +(totals.noMatch?'❓ '+totals.noMatch+' had no matching allotment at all (no ALLOT row found for that artist+client)<br>':'')
+        +(totals.errors.length?'⚠️ '+totals.errors.length+' error'+(totals.errors.length!==1?'s':'')+' — check Apps Script logs<br>':'')
+        +(quotaHit?'⏸️ Google\'s daily PDF limit was reached — whatever\'s left will build automatically tomorrow, or run this again once the quota resets.<br>':'')
+        +'</div>';
+      status.innerHTML=lines;
+      if(totals.updated>0||totals.sigBackfilled>0){toast((totals.updated+totals.sigBackfilled)+' quotation(s) updated — refreshing…');autoSyncOnLoad();}
+    }).catch(function(err){
+      btn.disabled=false;
+      btn.textContent='🔄 Generate missing quotations now';
+      status.innerHTML='<div style="padding:10px;background:#FFF1F3;border-radius:10px;color:#9B1A2F;font-size:13px;font-weight:600">Request failed — check connection and try again</div>';
+      console.warn('backfill failed',err);
+    });
+  }
+  runRound();
 }
 
 function runEmailAllQuotations(){
@@ -3178,8 +3238,18 @@ function refreshQuotation(role, artist, bride, eventNo, ds, location, oldUrl){
     var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
     if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:existing.note,quotationUrl:data.url})});
     renderCal();updateSidebar();refreshOpenPanels(artist);
+    // Same artist + same client, booked on other dates too (a 12/13/14 style
+    // multi-day booking) — the server just stamped the same PDF onto all of
+    // them, so pull those fresh links in quietly rather than waiting for the
+    // next full sync to show it.
+    var multiDates=data.datesUpdated&&data.datesUpdated>1;
+    if(multiDates){
+      reliableGet(gasUrl).then(function(d2){
+        if(d2&&d2.ok&&d2.avail){rebuildAllotmentsFromServer(d2.avail);renderCal();updateSidebar();}
+      }).catch(function(){});
+    }
     if(data.foundResponse){
-      toast(data.emailed?('📧 Updated quotation emailed to '+artist):'📄 Quotation updated with full form details');
+      toast(data.emailed?('📧 Updated quotation emailed to '+artist+(multiDates?' — applied to all '+data.datesUpdated+' dates':'')):('📄 Quotation updated'+(multiDates?' for all '+data.datesUpdated+' dates':' with full form details')));
     } else {
       toast('Form not submitted yet — quotation still shows basic details only');
     }
@@ -3228,7 +3298,15 @@ function sendQuotationToServer(role, artist, bride, eventNo, eventName, ds, loca
     var existing=getAllotments(artist,ds).find(function(x){return x.bride===(bride||'')&&x.eventNo===(eventNo||'');});
     if(gasUrl&&existing)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:artist,date:ds,status:'ALLOT',note:existing.note,eventKey:existing.note,quotationUrl:data.url})});
     renderCal();updateSidebar();refreshOpenPanels(artist);
-    toast(data.emailed?('📧 Quotation emailed to '+artist+' ('+data.email+')'):('📄 Quotation created — no email on file for '+artist));
+    // Same fill applies to every other date of this booking too — quietly
+    // pull the fresh links in so they show right away, not just on next sync.
+    var multiDates=data.datesUpdated&&data.datesUpdated>1;
+    if(multiDates){
+      reliableGet(gasUrl).then(function(d2){
+        if(d2&&d2.ok&&d2.avail){rebuildAllotmentsFromServer(d2.avail);renderCal();updateSidebar();}
+      }).catch(function(){});
+    }
+    toast(data.emailed?('📧 Quotation emailed to '+artist+' ('+data.email+')'+(multiDates?' — applied to all '+data.datesUpdated+' dates':'')):('📄 Quotation created'+(multiDates?' for all '+data.datesUpdated+' dates':'')+' — no email on file for '+artist));
   }).catch(function(err){
     console.warn('Quotation server generation failed',err);
   });

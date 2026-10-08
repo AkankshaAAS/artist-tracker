@@ -49,6 +49,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .dc:not(.other-m):hover{background:#FFF5F8}
 .dc.sel{box-shadow:inset 0 0 0 2.5px #A3365A}
 .dc.s-free{background:#F3FAF2}.dc.s-busy{background:#FFF1F3}.dc.s-tentative{background:#FFF8EC}.dc.s-leave{background:#F5F0FF}
+.dc.s-nobudget{background:#F1F3F6}.dc:not(.other-m).s-nobudget:hover{background:#E6E9EE}
 .dc.bride-day{background:#FFF1F3}
 .dc:not(.other-m).s-free:hover{background:#E8F5E5}
 .dc:not(.other-m).s-busy:hover{background:#FFE5E9}
@@ -58,6 +59,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .dc.today .dc-num{color:#A3365A;font-weight:700}
 .dc-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 8px;border-radius:999px;margin-top:3px;line-height:1.4}
 .pill-free{background:#DCFACC;color:#3B6D11}.pill-busy{background:#FFD6DC;color:#9B1A2F}.pill-tentative{background:#FDE8C3;color:#7A4E00}.pill-leave{background:#E8DCFF;color:#4A2B9C}
+.pill-nobudget{background:#DDE2E9;color:#334155}
 .dc-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-left:4px;vertical-align:middle}
 .dc-bride{font-size:9.5px;color:#A3365A;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-ev{font-size:9px;color:#999}
@@ -67,10 +69,11 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .dc-note{font-size:10px;color:#888;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 .action-hint{font-size:12px;color:#999;text-align:center;margin:10px 0 6px}
-.action-bar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:8px}
+.action-bar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:8px}
 .abtn{height:44px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;border:none;display:flex;align-items:center;justify-content:center;gap:6px;transition:opacity 0.15s}
 .abtn:hover{opacity:0.88}
 .abtn-free{background:#67C23A;color:#fff}.abtn-busy{background:#E54863;color:#fff}.abtn-tent{background:#F4A62A;color:#fff}.abtn-leave{background:#8E63D2;color:#fff}
+.abtn-nobudget{background:#64748B;color:#fff;font-size:11.5px;line-height:1.15;padding:0 6px}
 .abtn-clear{height:44px;padding:0 16px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;display:flex;align-items:center;gap:5px}
 .abtn-clear:hover{border-color:#A3365A;color:#A3365A}
 .info-bar{background:#F8F7F8;border-radius:12px;padding:10px 14px;font-size:12px;color:#888;display:flex;align-items:center;gap:8px;margin-top:8px}
@@ -329,6 +332,7 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
           <button class="abtn abtn-free" onclick="markSel('FREE')"><i class="ti ti-check" aria-hidden="true"></i>Mark FREE</button>
           <button class="abtn abtn-busy" onclick="markSel('BUSY')"><i class="ti ti-x" aria-hidden="true"></i>Mark BUSY</button>
           <button class="abtn abtn-tent" onclick="markSel('TENTATIVE')"><i class="ti ti-clock" aria-hidden="true"></i>Tentative</button>
+          <button class="abtn abtn-nobudget" onclick="markSel('NOBUDGET')"><i class="ti ti-coin-off" aria-hidden="true"></i>No Budget</button>
           <button class="abtn abtn-leave" onclick="markSel('ALLOT')"><i class="ti ti-user-check" aria-hidden="true"></i>Allot</button>
           <button class="abtn-clear" onclick="clearSel()"><i class="ti ti-trash" aria-hidden="true"></i>Clear</button>
         </div>
@@ -1743,6 +1747,7 @@ function doPost(e) {
         <button onclick="openSlotModalFromNoteModal()" style="height:36px;border-radius:9px;background:#E54863;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">✕ BUSY</button>
         <button onclick="setStatusFromModal('TENTATIVE')" style="height:36px;border-radius:9px;background:#F4A62A;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">⏱ Tentative</button>
         <button onclick="openAllotFlow()" style="height:36px;border-radius:9px;background:#8E63D2;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">👤 Allot</button>
+        <button onclick="setStatusFromModal('NOBUDGET')" style="grid-column:1 / -1;height:36px;border-radius:9px;background:#64748B;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">🚫 Not agreeing to the budget</button>
       </div>
     </div>
 
@@ -1862,9 +1867,10 @@ var gasUrl=DEFAULT_GAS_URL;
 var MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 var MON3=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 var DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-var STATUS_PILL={FREE:'pill-free',BUSY:'pill-busy',TENTATIVE:'pill-tentative',LEAVE:'pill-leave',ALLOT:'pill-leave'};
-var STATUS_CLASS={FREE:'s-free',BUSY:'s-busy',TENTATIVE:'s-tentative',LEAVE:'s-leave',ALLOT:'s-leave'};
-var STATUS_DOT={FREE:'#67C23A',BUSY:'#E54863',TENTATIVE:'#F4A62A',LEAVE:'#8E63D2',ALLOT:'#8E63D2'};
+var STATUS_PILL={FREE:'pill-free',BUSY:'pill-busy',TENTATIVE:'pill-tentative',LEAVE:'pill-leave',ALLOT:'pill-leave',NOBUDGET:'pill-nobudget'};
+var STATUS_CLASS={FREE:'s-free',BUSY:'s-busy',TENTATIVE:'s-tentative',LEAVE:'s-leave',ALLOT:'s-leave',NOBUDGET:'s-nobudget'};
+var STATUS_DOT={FREE:'#67C23A',BUSY:'#E54863',TENTATIVE:'#F4A62A',LEAVE:'#8E63D2',ALLOT:'#8E63D2',NOBUDGET:'#64748B'};
+var STATUS_LABEL={NOBUDGET:'Not agreeing to the budget'};
 
 // Fix RT values that Sheets auto-converted to Date objects
 // e.g. "Sat Dec 30 1899 12:00:00 GMT+0521 (India Standard Time)" → "12:00 PM"
@@ -2671,7 +2677,7 @@ function renderCal(){
         inner+='</div>';
       });
     } else if(st){
-      var lbl={FREE:'Free',BUSY:'Busy',TENTATIVE:'Tentative',LEAVE:'Leave',ALLOT:'Allot'}[st];
+      var lbl={FREE:'Free',BUSY:'Busy',TENTATIVE:'Tentative',LEAVE:'Leave',ALLOT:'Allot',NOBUDGET:'No Budget'}[st];
       inner+='<span class="dc-pill '+STATUS_PILL[st]+'">'+lbl+'</span>';
     }
     if(note)inner+='<div class="dc-note">'+esc(note)+'</div>';
@@ -2778,7 +2784,7 @@ function showAvailExpand(ds, activeSlot) {
         }
         busy.push({name:a, status:'ALLOT'}); return;
       }
-      if (rec && rec.status==='LEAVE') { busy.push({name:a, status:rec.status}); return; }
+      if (rec && (rec.status==='LEAVE' || rec.status==='NOBUDGET')) { busy.push({name:a, status:rec.status}); return; }
       if (slotBusy) { busy.push({name:a, status:'BUSY'}); return; }
       if (rec && rec.status==='BUSY' && !hasSpecificSlots) { busy.push({name:a, status:'BUSY'}); return; }
       if (rec && rec.status==='TENTATIVE') { tentative.push({name:a, note:rec.note}); return; }
@@ -4034,7 +4040,7 @@ function renderUnavailPage(){
         html+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #F8F0F2;flex-wrap:wrap">';
         html+='<span style="width:8px;height:8px;border-radius:50%;background:'+color+';flex-shrink:0"></span>';
         html+='<span style="font-size:13px;font-weight:700;color:#222">'+esc(item.artist)+'</span>';
-        html+='<span style="font-size:10px;font-weight:700;color:'+color+';background:'+color+'22;border-radius:5px;padding:1px 7px">'+item.status+'</span>';
+        html+='<span style="font-size:10px;font-weight:700;color:'+color+';background:'+color+'22;border-radius:5px;padding:1px 7px">'+(STATUS_LABEL[item.status]||item.status)+'</span>';
         if(item.note)html+='<span style="font-size:11px;color:#888">'+esc(item.note)+'</span>';
         if(item.slots.length && item.slots.length<RT_SLOTS.length){
           html+='<div style="flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px;padding-left:16px;margin-top:3px">'+item.slots.map(function(s){

@@ -49,7 +49,6 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .dc:not(.other-m):hover{background:#FFF5F8}
 .dc.sel{box-shadow:inset 0 0 0 2.5px #A3365A}
 .dc.s-free{background:#F3FAF2}.dc.s-busy{background:#FFF1F3}.dc.s-tentative{background:#FFF8EC}.dc.s-leave{background:#F5F0FF}
-.dc.s-nobudget{background:#F1F3F6}.dc:not(.other-m).s-nobudget:hover{background:#E6E9EE}
 .dc.bride-day{background:#FFF1F3}
 .dc:not(.other-m).s-free:hover{background:#E8F5E5}
 .dc:not(.other-m).s-busy:hover{background:#FFE5E9}
@@ -59,7 +58,6 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .dc.today .dc-num{color:#A3365A;font-weight:700}
 .dc-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:2px 8px;border-radius:999px;margin-top:3px;line-height:1.4}
 .pill-free{background:#DCFACC;color:#3B6D11}.pill-busy{background:#FFD6DC;color:#9B1A2F}.pill-tentative{background:#FDE8C3;color:#7A4E00}.pill-leave{background:#E8DCFF;color:#4A2B9C}
-.pill-nobudget{background:#DDE2E9;color:#334155}
 .dc-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-left:4px;vertical-align:middle}
 .dc-bride{font-size:9.5px;color:#A3365A;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-ev{font-size:9px;color:#999}
@@ -69,11 +67,10 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
 .dc-note{font-size:10px;color:#888;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 .action-hint{font-size:12px;color:#999;text-align:center;margin:10px 0 6px}
-.action-bar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:8px}
+.action-bar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:8px}
 .abtn{height:44px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;border:none;display:flex;align-items:center;justify-content:center;gap:6px;transition:opacity 0.15s}
 .abtn:hover{opacity:0.88}
 .abtn-free{background:#67C23A;color:#fff}.abtn-busy{background:#E54863;color:#fff}.abtn-tent{background:#F4A62A;color:#fff}.abtn-leave{background:#8E63D2;color:#fff}
-.abtn-nobudget{background:#64748B;color:#fff;font-size:11.5px;line-height:1.15;padding:0 6px}
 .abtn-clear{height:44px;padding:0 16px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;display:flex;align-items:center;gap:5px}
 .abtn-clear:hover{border-color:#A3365A;color:#A3365A}
 .info-bar{background:#F8F7F8;border-radius:12px;padding:10px 14px;font-size:12px;color:#888;display:flex;align-items:center;gap:8px;margin-top:8px}
@@ -332,7 +329,6 @@ body,div,span,button,select,input,textarea{font-family:'Inter',var(--font-sans),
           <button class="abtn abtn-free" onclick="markSel('FREE')"><i class="ti ti-check" aria-hidden="true"></i>Mark FREE</button>
           <button class="abtn abtn-busy" onclick="markSel('BUSY')"><i class="ti ti-x" aria-hidden="true"></i>Mark BUSY</button>
           <button class="abtn abtn-tent" onclick="markSel('TENTATIVE')"><i class="ti ti-clock" aria-hidden="true"></i>Tentative</button>
-          <button class="abtn abtn-nobudget" onclick="markSel('NOBUDGET')"><i class="ti ti-coin-off" aria-hidden="true"></i>No Budget</button>
           <button class="abtn abtn-leave" onclick="markSel('ALLOT')"><i class="ti ti-user-check" aria-hidden="true"></i>Allot</button>
           <button class="abtn-clear" onclick="clearSel()"><i class="ti ti-trash" aria-hidden="true"></i>Clear</button>
         </div>
@@ -1647,6 +1643,8 @@ function normDate(v) {
 }
 
 function doPost(e) {
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(25000); } catch(lockErr) {}
   try {
     var ss = SS_ID ? SpreadsheetApp.openById(SS_ID) : SpreadsheetApp.getActiveSpreadsheet();
     var availSheet = ss.getSheetByName(AVAIL_SHEET) || ensureSheets(ss).availSheet;
@@ -1700,6 +1698,8 @@ function doPost(e) {
     return ContentService.createTextOutput('ok');
   } catch(err) {
     return ContentService.createTextOutput('error: '+err.toString());
+  } finally {
+    try { lock.releaseLock(); } catch(relErr) {}
   }
 }
 
@@ -1747,7 +1747,6 @@ function doPost(e) {
         <button onclick="openSlotModalFromNoteModal()" style="height:36px;border-radius:9px;background:#E54863;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">✕ BUSY</button>
         <button onclick="setStatusFromModal('TENTATIVE')" style="height:36px;border-radius:9px;background:#F4A62A;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">⏱ Tentative</button>
         <button onclick="openAllotFlow()" style="height:36px;border-radius:9px;background:#8E63D2;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">👤 Allot</button>
-        <button onclick="setStatusFromModal('NOBUDGET')" style="grid-column:1 / -1;height:36px;border-radius:9px;background:#64748B;color:#fff;border:none;font-size:12px;font-weight:700;cursor:pointer">🚫 Not agreeing to the budget</button>
       </div>
     </div>
 
@@ -1764,6 +1763,7 @@ function doPost(e) {
       <div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Allotting for</div>
       <div id="allot-selected-bride" style="font-size:13px;font-weight:700;color:#A3365A;margin-bottom:10px"></div>
       <div id="allot-existing-summary-role" style="margin-bottom:10px"></div>
+      <div style="font-size:10.5px;color:#888;margin:2px 0 8px;line-height:1.5">Use the dropdown on any row above to change that role. Or allot the artist selected at the top of the page as:</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button onclick="confirmAllot('MA')" style="height:48px;border-radius:12px;background:#A3365A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">MA</button>
         <button onclick="confirmAllot('HA')" style="height:48px;border-radius:12px;background:#6B3A8A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">HA</button>
@@ -1777,7 +1777,8 @@ function doPost(e) {
       <div style="margin-top:8px">
         <button onclick="openSidersFlow()" style="height:44px;width:100%;border-radius:12px;background:#0F9B8E;color:#fff;border:none;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:0.3px">🧵 + New sider group</button>
       </div>
-      <button onclick="backToBrides()" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
+      <button onclick="closeModal()" style="margin-top:10px;height:40px;width:100%;border-radius:9px;background:#A3365A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer">Done</button>
+      <button onclick="backToBrides()" style="margin-top:8px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
     </div>
 
     <!-- ALLOT FLOW: Siders — an extra client (e.g. bride's mom, sister) also
@@ -1793,7 +1794,9 @@ function doPost(e) {
       <input id="siders-names" type="text" placeholder="e.g. Groom Siders, Bride's Sister" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:10px;font-family:inherit">
       <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">No. of siders (extra people)</div>
       <input id="siders-count" type="number" min="1" value="1" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 12px;font-size:13px;margin-bottom:12px;font-family:inherit">
-      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">Artist doing their look — confirm as</div>
+      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px">Artist for this sider group</div>
+      <select id="siders-artist" style="width:100%;height:40px;border-radius:9px;border:1.5px solid #ECECEC;padding:0 10px;font-size:13px;margin-bottom:10px;font-family:inherit"></select>
+      <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">Confirm as</div>
       <label style="display:flex;align-items:center;gap:8px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px;padding:8px 11px;margin-bottom:10px;cursor:pointer;font-size:12px;font-weight:600;color:#0F7A6E">
         <input type="checkbox" id="siders-all-events" checked style="width:16px;height:16px;cursor:pointer">
         Apply to <b>all events</b> of this bride (so no event gets missed)
@@ -1802,7 +1805,7 @@ function doPost(e) {
         <button onclick="confirmSidersRole('MA')" style="height:48px;border-radius:12px;background:#A3365A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">MA</button>
         <button onclick="confirmSidersRole('HA')" style="height:48px;border-radius:12px;background:#6B3A8A;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:1px">HA</button>
       </div>
-      <div style="font-size:10px;color:#aaa;margin-top:6px;line-height:1.5">Uses whichever artist is selected in the dropdown up top. Confirming MA (or HA) for a group that already has one <b>replaces</b> that artist — so re-allotting is just: pick the new artist, confirm the same role. Different group names (Groom vs Bride's Siders) stay separate.</div>
+      <div style="font-size:10px;color:#aaa;margin-top:6px;line-height:1.5">Uses the artist chosen above. Confirming MA (or HA) for a group that already has one <b>replaces</b> that artist — so re-allotting is just: pick the new artist, confirm the same role. Different group names (Groom vs Bride's Siders) stay separate.</div>
       <button onclick="showModalSection('role')" style="margin-top:10px;height:34px;width:100%;border-radius:9px;background:#F8F7F8;color:#666;border:1.5px solid #ECECEC;font-size:12px;font-weight:600;cursor:pointer">← Back</button>
     </div>
 
@@ -1856,6 +1859,67 @@ function doPost(e) {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 var jsPDF = (window.jspdf && window.jspdf.jsPDF) || null;
+// ── Write queue + pending-edit memory ─────────────────────────────
+// Problem this fixes: every edit was sent to Google Sheets "fire and forget",
+// several at once (delete old artist + add new artist), and the 90-second
+// auto-sync could bring back the OLD sheet data before the sheet had
+// finished saving — so the old artist reappeared a few seconds later.
+// Now: (1) all writes go out ONE AT A TIME in order, (2) every allotment
+// change is remembered locally until the sheet confirms it, and (3) a sync
+// can never overwrite a change that hasn't landed in the sheet yet.
+var pendingOps={};
+try{var _po=localStorage.getItem('bmp_pending_v1');if(_po)pendingOps=JSON.parse(_po)||{};}catch(e){}
+function savePending(){try{localStorage.setItem('bmp_pending_v1',JSON.stringify(pendingOps));}catch(e){}}
+var _origFetch=window.fetch?window.fetch.bind(window):null;
+var _writeChain=Promise.resolve(),_writesInFlight=0,_lastEditAt=0;
+function recordPendingOp(p){
+  if(!p||!p.artist||!p.date)return;
+  if(p.action==='upsert'&&p.status==='ALLOT'){
+    var pn=parseAllotNote(p.note);
+    pendingOps[allotKey(p.artist,p.date,pn.bride,pn.eventNo,p.note)]={type:'upsert',artist:p.artist,date:p.date,note:p.note,quotationUrl:p.quotationUrl||'',at:Date.now()};
+    savePending();
+  } else if(p.action==='delete'&&p.eventKey){
+    var dn=parseAllotNote(p.eventKey);
+    pendingOps[allotKey(p.artist,p.date,dn.bride,dn.eventNo,p.eventKey)]={type:'del',artist:p.artist,date:p.date,note:p.eventKey,at:Date.now()};
+    savePending();
+  }
+}
+if(_origFetch){
+  window.fetch=function(url,opts){
+    if(opts&&opts.method==='POST'&&typeof url==='string'&&url.indexOf('script.google.com')>=0){
+      try{recordPendingOp(JSON.parse(opts.body));}catch(e){}
+      _lastEditAt=Date.now();_writesInFlight++;
+      var run=function(){return _origFetch(url,opts);};
+      var p=_writeChain.then(run,run);
+      _writeChain=p.then(function(){_writesInFlight--;_lastEditAt=Date.now();},function(){_writesInFlight--;});
+      return p;
+    }
+    return _origFetch(url,opts);
+  };
+}
+// Called right after allotments are rebuilt from the sheet: re-applies any
+// local change the sheet hasn't confirmed yet, and drops ones it has.
+function applyPendingOverlay(){
+  var now=Date.now(),changed=false;
+  Object.keys(pendingOps).forEach(function(k){
+    var op=pendingOps[k];
+    if(now-op.at>600000){delete pendingOps[k];changed=true;return;} // give up after 10 min
+    var onServer=!!allotments[k];
+    if(op.type==='del'){
+      if(onServer){delete allotments[k];}            // sheet still has it → keep it hidden
+      else{delete pendingOps[k];changed=true;}       // sheet caught up → done
+    } else {
+      if(onServer){delete pendingOps[k];changed=true;} // sheet caught up → done
+      else{
+        var pn=parseAllotNote(op.note);
+        allotments[k]={artist:op.artist,date:op.date,bride:pn.bride,eventNo:pn.eventNo,note:op.note,quotationUrl:op.quotationUrl||'',quoteDataSig:''};
+      }
+    }
+  });
+  if(changed)savePending();
+  saveAllot();
+}
+
 var vm=new Date().getMonth(),vy=new Date().getFullYear();
 var selDates=new Set(),activeDate=null;
 var avail={},bookings=[];
@@ -1867,10 +1931,9 @@ var gasUrl=DEFAULT_GAS_URL;
 var MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 var MON3=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 var DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-var STATUS_PILL={FREE:'pill-free',BUSY:'pill-busy',TENTATIVE:'pill-tentative',LEAVE:'pill-leave',ALLOT:'pill-leave',NOBUDGET:'pill-nobudget'};
-var STATUS_CLASS={FREE:'s-free',BUSY:'s-busy',TENTATIVE:'s-tentative',LEAVE:'s-leave',ALLOT:'s-leave',NOBUDGET:'s-nobudget'};
-var STATUS_DOT={FREE:'#67C23A',BUSY:'#E54863',TENTATIVE:'#F4A62A',LEAVE:'#8E63D2',ALLOT:'#8E63D2',NOBUDGET:'#64748B'};
-var STATUS_LABEL={NOBUDGET:'Not agreeing to the budget'};
+var STATUS_PILL={FREE:'pill-free',BUSY:'pill-busy',TENTATIVE:'pill-tentative',LEAVE:'pill-leave',ALLOT:'pill-leave'};
+var STATUS_CLASS={FREE:'s-free',BUSY:'s-busy',TENTATIVE:'s-tentative',LEAVE:'s-leave',ALLOT:'s-leave'};
+var STATUS_DOT={FREE:'#67C23A',BUSY:'#E54863',TENTATIVE:'#F4A62A',LEAVE:'#8E63D2',ALLOT:'#8E63D2'};
 
 // Fix RT values that Sheets auto-converted to Date objects
 // e.g. "Sat Dec 30 1899 12:00:00 GMT+0521 (India Standard Time)" → "12:00 PM"
@@ -1973,7 +2036,7 @@ function addRTBlockForArtist(a,d,rt){
 }
 // Find the ready-time for the event a given allotment belongs to.
 function rtForAllotment(al){
-  var b=getBookingsForDate(al.date).find(function(x){return x.bride===al.bride && x.eventNo===al.eventNo;});
+  var b=getBookingsForDate(al.date).find(function(x){return nrmB(x.bride)===nrmB(al.bride) && nrmE(x.eventNo)===nrmE(al.eventNo);});
   return b?b.readyTime:'';
 }
 // Retroactively block every allotted artist on a date whose slots haven't been
@@ -2010,7 +2073,7 @@ function isAnshulMakeupBy(mb){
 function eventHasMA(ds,bride,eventNo){
   return Object.keys(allotments).some(function(k){
     var a=allotments[k];
-    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return false;
+    if(a.date!==ds||!sameEvt(a,bride,eventNo))return false;
     var p=parseAllotNote(a.note);
     if(/Siders\s*\(/i.test(p.roleText))return false; // a sider's MA doesn't count as the bride's MA
     return /\bMA\b/.test(p.roleText);
@@ -2191,6 +2254,7 @@ function rebuildAllotmentsFromServer(rows){
     var parsed=parseAllotNote(r.note);
     setAllotment(r.artist,r.date,parsed.bride,parsed.eventNo,r.note,r.quotationUrl||'',r.quoteDataSig||'');
   });
+  applyPendingOverlay();
 }
 function initials(n){if(!n)return'?';var p=n.trim().split(' ');return(p.length>1?p[0][0]+p[1][0]:n.slice(0,2)).toUpperCase();}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -2436,6 +2500,8 @@ function openGasUrl(){
 // visitor still sees the last-loaded data instead of an error banner.
 function autoSyncOnLoad(){
   if(!gasUrl) return;
+  if(_writesInFlight>0||(Date.now()-_lastEditAt)<15000) return;   // a save is still going out
+  var _mw=document.getElementById('note-modal-wrap'); if(_mw&&_mw.classList.contains('open')) return; // mid-edit
   reliableGet(gasUrl)
     .then(function(data){
       if(!data.ok)throw new Error(data.error||'Sheet returned error');
@@ -2677,7 +2743,7 @@ function renderCal(){
         inner+='</div>';
       });
     } else if(st){
-      var lbl={FREE:'Free',BUSY:'Busy',TENTATIVE:'Tentative',LEAVE:'Leave',ALLOT:'Allot',NOBUDGET:'No Budget'}[st];
+      var lbl={FREE:'Free',BUSY:'Busy',TENTATIVE:'Tentative',LEAVE:'Leave',ALLOT:'Allot'}[st];
       inner+='<span class="dc-pill '+STATUS_PILL[st]+'">'+lbl+'</span>';
     }
     if(note)inner+='<div class="dc-note">'+esc(note)+'</div>';
@@ -2784,7 +2850,7 @@ function showAvailExpand(ds, activeSlot) {
         }
         busy.push({name:a, status:'ALLOT'}); return;
       }
-      if (rec && (rec.status==='LEAVE' || rec.status==='NOBUDGET')) { busy.push({name:a, status:rec.status}); return; }
+      if (rec && rec.status==='LEAVE') { busy.push({name:a, status:rec.status}); return; }
       if (slotBusy) { busy.push({name:a, status:'BUSY'}); return; }
       if (rec && rec.status==='BUSY' && !hasSpecificSlots) { busy.push({name:a, status:'BUSY'}); return; }
       if (rec && rec.status==='TENTATIVE') { tentative.push({name:a, note:rec.note}); return; }
@@ -2877,7 +2943,7 @@ function roleEntryFor(ds,bride,eventNo,role){
   Object.keys(allotments).forEach(function(k){
     if(found)return;
     var a=allotments[k];
-    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return;
+    if(a.date!==ds||!sameEvt(a,bride,eventNo))return;
     var p=parseAllotNote(a.note);
     if(/Siders\s*\(/i.test(p.roleText))return; // sider MA/HA don't count as the bride's own
     var rm=p.roleText.match(/\b(MA|HA|DR|AST|CC)\b/);
@@ -2976,7 +3042,16 @@ function dcClick(ds){
   showAvailExpand(ds);
   if(artist)renderArtistSlotsPanel(artist,ds);
   if(!artist){
-    // No artist selected — just show availability panel
+    var bks0=getBookingsForDate(ds);
+    if(bks0.length){
+      activeDate=ds;
+      var d0=new Date(ds+'T00:00:00');
+      document.getElementById('note-modal-title').textContent=d0.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'});
+      document.getElementById('note-modal-sub').textContent='Tap a booking to see / edit its artists';
+      var cur0=document.getElementById('current-allotments');if(cur0)cur0.style.display='none';
+      openAllotFlow();
+      document.getElementById('note-modal-wrap').classList.add('open');
+    }
     return;
   }
   var rec=getAv(artist,ds);
@@ -2998,6 +3073,14 @@ function dcClick(ds){
 }
 
 function renderCurrentAllotments(artist,ds,myAllots){
+  renderCurrentAllotmentsCore(artist,ds,myAllots);
+  var box=document.getElementById('current-allotments');
+  var extra=editEventButtonsHtml(ds);
+  if(!extra)return;
+  if(box.style.display==='none'){box.style.display='block';box.innerHTML='';}
+  box.insertAdjacentHTML('beforeend',extra);
+}
+function renderCurrentAllotmentsCore(artist,ds,myAllots){
   var box=document.getElementById('current-allotments');
   if(!myAllots||!myAllots.length){box.style.display='none';box.innerHTML='';return;}
   box.style.display='block';
@@ -3022,6 +3105,142 @@ function renderCurrentAllotments(artist,ds,myAllots){
         +'<button onclick="removeOneAllotment(\''+artist.replace(/'/g,"\\'")+'\',\''+ds+'\',\''+(al.bride||'').replace(/'/g,"\\'")+'\',\''+(al.eventNo||'').replace(/'/g,"\\'")+'\',\''+(al.note||'').replace(/'/g,"\\'")+'\')" style="flex-shrink:0;width:22px;height:22px;border-radius:6px;background:#fff;border:1.5px solid '+roleColor+'55;color:'+roleColor+';font-size:12px;font-weight:800;cursor:pointer;line-height:1">✕</button>'
         +'</div>';
     }).join('');
+}
+
+// ══ Event allotment editor — change MA / HA / sider artists in one place ══
+var _slotReg=[],_extraReg=[];
+function nrmB(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,' ');}
+function nrmE(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,'');}
+// Same bride + same event, ignoring capitals/extra spaces (so "ROHIT GROOM" = "Rohit Groom")
+function sameEvt(a,bride,eventNo){return nrmB(a.bride)===nrmB(bride)&&nrmE(a.eventNo)===nrmE(eventNo);}
+function allotRoleInfo(a){
+  var p=parseAllotNote(a.note),rt=p.roleText||'';
+  var role=(rt.match(/\b(MA|HA|DR|AST|CC)\b/)||[])[1]||'';
+  var isS=/Siders\s*\(/i.test(rt),label='',count='';
+  if(isS){var m=rt.match(/Siders\s*\((\d+)\)\s*:?\s*(.*)$/i);count=m?m[1]:'';label=m?(m[2]||'').trim():'';}
+  return {role:role,isSider:isS,label:label,count:count};
+}
+function eventAllots(ds,bride,eventNo){
+  return Object.keys(allotments).map(function(k){return allotments[k];}).filter(function(a){return a.date===ds&&sameEvt(a,bride,eventNo);});
+}
+function artistOptionsHtml(){
+  return '<option value="">— change / choose artist —</option>'+ALL_ARTISTS.slice().sort(function(a,b){return a.localeCompare(b);}).map(function(a){return '<option value="'+esc(a)+'">'+esc(a)+'</option>';}).join('');
+}
+// Remove one allotment locally + in the sheet
+function dropEntry(a){
+  removeAllotment(a.artist,a.date,a.bride,a.eventNo,a.note);
+  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'delete',artist:a.artist,date:a.date,eventKey:a.note})});
+  if(!getAllotments(a.artist,a.date).length)clearSlotsForArtistDate(a.artist,a.date);
+}
+function slotEntries(slot){
+  if(!allotBride||!activeDate)return [];
+  return eventAllots(activeDate,allotBride.bride,allotBride.eventNo).filter(function(a){
+    var i=allotRoleInfo(a);
+    if(slot.kind==='main')return !i.isSider&&i.role===slot.role;
+    return i.isSider&&i.role===slot.role&&i.label.toLowerCase()===String(slot.label||'').toLowerCase();
+  });
+}
+function slotRowHtml(idx,role,entries){
+  var color=ROLE_BADGE_COLORS[role]||'#8E63D2';
+  var cur=entries.length?entries.map(function(e){return esc(e.artist);}).join(' + '):'<span style="color:#bbb;font-weight:500">not allotted</span>';
+  var rm=entries.length?'<button onclick="clearSlot('+idx+')" title="Remove" style="flex-shrink:0;width:24px;height:24px;border-radius:6px;background:#fff;border:1.5px solid '+color+'66;color:'+color+';font-size:12px;font-weight:800;cursor:pointer;line-height:1">✕</button>':'';
+  return '<div style="display:flex;align-items:center;gap:6px;margin:5px 0">'
+    +'<span style="flex-shrink:0;width:34px;text-align:center;font-size:12px;font-weight:800;color:#fff;background:'+color+';border-radius:6px;padding:4px 0">'+role+'</span>'
+    +'<span style="flex:1;min-width:0;font-size:12.5px;font-weight:700;color:#222;word-break:break-word">'+cur+'</span>'
+    +'<select onchange="applySlot('+idx+',this.value)" style="width:112px;height:32px;border-radius:8px;border:1.5px solid #ECECEC;font-size:11px;font-family:inherit;background:#fff">'+artistOptionsHtml()+'</select>'
+    +rm+'</div>';
+}
+function renderEventEditor(){
+  if(!allotBride||!activeDate)return '';
+  var ds=activeDate,bride=allotBride.bride,eventNo=allotBride.eventNo;
+  var all=eventAllots(ds,bride,eventNo);
+  _slotReg=[];_extraReg=[];
+  var html='<div style="background:#FFF6FA;border:1.5px solid #F4C0D1;border-radius:10px;padding:9px 11px">';
+  html+='<div style="font-size:10px;font-weight:800;color:#A3365A;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">✎ Edit — '+esc(bride)+' · '+esc(eventNo)+'</div>';
+  ['MA','HA'].forEach(function(r){
+    var slot={kind:'main',role:r};_slotReg.push(slot);
+    html+=slotRowHtml(_slotReg.length-1,r,slotEntries(slot));
+  });
+  // Drappist / Assistant / Content creator — listed with a remove button
+  all.forEach(function(a){
+    var i=allotRoleInfo(a);
+    if(i.isSider||!i.role||i.role==='MA'||i.role==='HA')return;
+    _extraReg.push(a);
+    var col=ROLE_BADGE_COLORS[i.role]||'#8E63D2';
+    html+='<div style="display:flex;align-items:center;gap:6px;margin:5px 0"><span style="flex-shrink:0;min-width:34px;text-align:center;font-size:11px;font-weight:800;color:#fff;background:'+col+';border-radius:6px;padding:4px 5px">'+i.role+'</span>'
+      +'<span style="flex:1;font-size:12.5px;font-weight:700;color:#222">'+esc(a.artist)+'</span>'
+      +'<button onclick="removeExtra('+(_extraReg.length-1)+')" title="Remove" style="flex-shrink:0;width:24px;height:24px;border-radius:6px;background:#fff;border:1.5px solid '+col+'66;color:'+col+';font-size:12px;font-weight:800;cursor:pointer;line-height:1">✕</button></div>';
+  });
+  // Sider groups
+  var groups={},order=[];
+  all.forEach(function(a){
+    var i=allotRoleInfo(a);if(!i.isSider)return;
+    var k=i.label.toLowerCase()||'(unnamed)';
+    if(!groups[k]){groups[k]={label:i.label,count:i.count};order.push(k);}
+    if(i.count)groups[k].count=i.count;
+  });
+  order.forEach(function(k){
+    var g=groups[k];
+    html+='<div style="margin-top:8px;padding:7px 9px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px">'
+      +'<div style="font-size:10px;font-weight:800;color:#0F9B8E;text-transform:uppercase;letter-spacing:.4px">🧵 Sider — '+esc(g.label||'(unnamed)')+' <span style="font-weight:600;color:#666;text-transform:none">('+esc(g.count||'?')+')</span></div>';
+    ['MA','HA'].forEach(function(r){
+      var slot={kind:'sider',role:r,label:g.label,count:g.count||'1'};_slotReg.push(slot);
+      html+=slotRowHtml(_slotReg.length-1,r,slotEntries(slot));
+    });
+    html+='</div>';
+  });
+  if(!order.length)html+='<div style="font-size:11px;color:#aaa;margin-top:6px">No sider group yet — use “+ New sider group” below.</div>';
+  html+='</div>';
+  return html;
+}
+function refreshEditor(){
+  renderAllotDialogSummary();
+  renderCal();updateSidebar();
+  refreshOpenPanels(document.getElementById('artist-sel').value);
+}
+// Pick an artist for a slot → replaces whoever was there (bride's MA/HA or a sider group's MA/HA)
+function applySlot(idx,name){
+  var slot=_slotReg[idx];
+  if(!slot||!name||!allotBride||!activeDate)return;
+  var ds=activeDate,bride=allotBride.bride,eventNo=allotBride.eventNo;
+  var existing=slotEntries(slot);
+  if(existing.length===1&&existing[0].artist===name){toast(name+' is already '+slot.role+' here');refreshEditor();return;}
+  existing.forEach(dropEntry);
+  var noteText=bride+' — '+eventNo+' — '+slot.role+(slot.kind==='sider'?' — Siders ('+slot.count+'): '+slot.label:'');
+  setAllotment(name,ds,bride,eventNo,noteText);
+  addRTBlockForArtist(name,ds,slot.kind==='main'?(allotBride.readyTime||''):'');
+  if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist:name,date:ds,status:'ALLOT',note:noteText,eventKey:noteText})});
+  refreshEditor();
+  toast(slot.role+(slot.kind==='sider'?' ('+slot.label+')':'')+' → '+name);
+}
+function clearSlot(idx){
+  var slot=_slotReg[idx];if(!slot)return;
+  slotEntries(slot).forEach(dropEntry);
+  refreshEditor();
+  toast(slot.role+' removed');
+}
+function removeExtra(i){
+  var a=_extraReg[i];if(!a)return;
+  dropEntry(a);refreshEditor();toast('Removed '+a.artist);
+}
+function editEventButtonsHtml(ds){
+  var bs=getBookingsForDate(ds);if(!bs.length)return '';
+  return '<div style="margin-top:8px">'+bs.map(function(b){
+    return '<button onclick="openEventEditor(\''+ds+'\',\''+String(b.bride).replace(/'/g,"\\'")+'\',\''+String(b.eventNo).replace(/'/g,"\\'")+'\')" style="display:block;width:100%;height:38px;margin-bottom:6px;border-radius:9px;background:#FBE8EF;color:#A3365A;border:1.5px solid #F4C0D1;font-size:12px;font-weight:800;cursor:pointer;text-align:left;padding:0 12px">✎ Edit artists — '+esc(b.bride)+' '+esc(b.eventNo)+'</button>';
+  }).join('')+'</div>';
+}
+function openEventEditor(ds,bride,eventNo){
+  activeDate=ds;
+  var bk=getBookingsForDate(ds).find(function(x){return nrmB(x.bride)===nrmB(bride)&&nrmE(x.eventNo)===nrmE(eventNo);});
+  allotBride=bk||{bride:bride,eventNo:eventNo,location:'',eventName:'',readyTime:''};
+  var d=new Date(ds+'T00:00:00');
+  document.getElementById('note-modal-title').textContent=d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'});
+  document.getElementById('note-modal-sub').textContent='Edit artists for this event';
+  document.getElementById('allot-selected-bride').textContent=allotBride.bride+' — '+allotBride.eventNo;
+  var cur=document.getElementById('current-allotments');if(cur)cur.style.display='none';
+  renderAllotDialogSummary();
+  showModalSection('role');
+  document.getElementById('note-modal-wrap').classList.add('open');
 }
 
 function removeOneAllotment(artist,ds,bride,eventNo,note){
@@ -3113,8 +3332,8 @@ function setStatusFromModal(status){
 function allotSummaryHtml(ds){
   var all=Object.keys(allotments).map(function(k){return allotments[k];}).filter(function(a){return a.date===ds;});
   if(!all.length)return '<div style="background:#F8F7F8;border:1.5px solid #ECECEC;border-radius:10px;padding:9px 11px;font-size:11px;color:#999">No artists allotted yet for this date.</div>';
-  var groups={},order=[];
-  all.forEach(function(a){var g=(a.bride||'General')+(a.eventNo?' — '+a.eventNo:'');if(!groups[g]){groups[g]=[];order.push(g);}groups[g].push(a);});
+  var groups={},order=[],glabel={};
+  all.forEach(function(a){var lbl=(a.bride||'General')+(a.eventNo?' — '+a.eventNo:'');var g=nrmB(a.bride||'General')+'|'+nrmE(a.eventNo);if(!groups[g]){groups[g]=[];order.push(g);glabel[g]=lbl;}groups[g].push(a);});
   var rows=order.map(function(g){
     var items=groups[g].map(function(a){
       var p=parseAllotNote(a.note);
@@ -3128,7 +3347,7 @@ function allotSummaryHtml(ds){
         +(isSider&&nm?' <span style="color:#888">('+esc(nm)+')</span>':'')
         +'</div>';
     }).join('');
-    return '<div style="margin-bottom:7px"><div style="font-size:11px;font-weight:800;color:#A3365A">'+esc(g)+'</div>'+items+'</div>';
+    return '<div style="margin-bottom:7px"><div style="font-size:11px;font-weight:800;color:#A3365A">'+esc(glabel[g])+'</div>'+items+'</div>';
   }).join('');
   return '<div style="background:#FFF6FA;border:1.5px solid #F4C0D1;border-radius:10px;padding:9px 11px">'
     +'<div style="font-size:10px;font-weight:800;color:#A3365A;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">Already allotted this date</div>'
@@ -3137,7 +3356,7 @@ function allotSummaryHtml(ds){
 function renderAllotDialogSummary(){
   var h=allotSummaryHtml(activeDate);
   var e1=document.getElementById('allot-existing-summary');if(e1)e1.innerHTML=h;
-  var e2=document.getElementById('allot-existing-summary-role');if(e2)e2.innerHTML=h;
+  var e2=document.getElementById('allot-existing-summary-role');if(e2)e2.innerHTML=(allotBride&&activeDate)?renderEventEditor():h;
 }
 
 function openAllotFlow(){
@@ -3175,13 +3394,17 @@ function backToBrides(){
   if(brides.length){showModalSection('bride');}else{showModalSection('main');}
 }
 
-function closeAllotFlow(){showModalSection('main');}
+function closeAllotFlow(){if(!document.getElementById('artist-sel').value){closeModal();return;}showModalSection('main');}
 
 function confirmAllot(role){
   var artist=document.getElementById('artist-sel').value;
   if(!artist||!activeDate)return;
   var bride=allotBride?allotBride.bride:'', eventNo=allotBride?allotBride.eventNo:'';
   var noteText=(allotBride?bride+' — '+eventNo+' — ':'')+role;
+  if(allotBride&&(role==='MA'||role==='HA')){
+    var exSame=eventAllots(activeDate,bride,eventNo).filter(function(a){var i=allotRoleInfo(a);return !i.isSider&&i.role===role&&a.artist!==artist;});
+    if(exSame.length&&confirm(role+' for this event is currently '+exSame.map(function(a){return a.artist;}).join(', ')+'.\n\nOK = REPLACE with '+artist+'\nCancel = keep them and ADD '+artist+' as an extra '+role))exSame.forEach(dropEntry);
+  }
   setAllotment(artist,activeDate,bride,eventNo,noteText);
   addRTBlockForArtist(artist,activeDate,allotBride?allotBride.readyTime:'');
   if(gasUrl)fetch(gasUrl,{method:'POST',mode:'no-cors',body:JSON.stringify({action:'upsert',artist,date:activeDate,status:'ALLOT',note:noteText,eventKey:noteText})});
@@ -3194,8 +3417,8 @@ function confirmAllot(role){
   }
 }
 
-function showAllotFormLink(role){
-  var artist=document.getElementById('artist-sel').value;
+function showAllotFormLink(role,artistOverride){
+  var artist=artistOverride||document.getElementById('artist-sel').value;
   var bride=allotBride?allotBride.bride:'';
   var location=allotBride?allotBride.location:'';
   var eventNo=allotBride?allotBride.eventNo:'';
@@ -3378,6 +3601,8 @@ function downloadQuotationPdf(role, artist, bride, ds, location){
 var siderEditMode=false;
 function setSiderGroupName(n){document.getElementById('siders-names').value=n;}
 function openSidersFlow(prefillLabel, prefillCount){
+  var _sa=document.getElementById('siders-artist');
+  if(_sa){_sa.innerHTML=artistOptionsHtml().replace('— change / choose artist —','— choose artist —');_sa.value=document.getElementById('artist-sel').value||'';}
   document.getElementById('siders-count').value=prefillCount||1;
   document.getElementById('siders-names').value=prefillLabel||'';
   var banner=document.getElementById('siders-edit-banner');
@@ -3399,7 +3624,7 @@ function findSiderAllot(ds,bride,eventNo,label,role){
   Object.keys(allotments).forEach(function(k){
     if(found)return;
     var a=allotments[k];
-    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return;
+    if(a.date!==ds||!sameEvt(a,bride,eventNo))return;
     var p=parseAllotNote(a.note); if(!/Siders\s*\(/i.test(p.roleText))return;
     var r=(p.roleText.match(/\b(MA|HA)\b/)||[])[1]||'';
     var lm=p.roleText.match(/Siders\s*\(\d+\)\s*:?\s*(.*)$/i);
@@ -3413,7 +3638,7 @@ function siderGroupsForEvent(ds,bride,eventNo){
   var groups={},order=[];
   Object.keys(allotments).forEach(function(k){
     var a=allotments[k];
-    if(a.date!==ds||a.bride!==bride||a.eventNo!==eventNo)return;
+    if(a.date!==ds||!sameEvt(a,bride,eventNo))return;
     var p=parseAllotNote(a.note); if(!/Siders\s*\(/i.test(p.roleText))return;
     var lm=String(a.note||'').match(/Siders\s*\((\d+)\)\s*:?\s*(.*)$/i);
     var label=(lm?(lm[2]||''):'').trim(),count=lm?lm[1]:'';
@@ -3428,6 +3653,7 @@ function siderGroupsForEvent(ds,bride,eventNo){
 // Existing sider groups shown in the allot dialog's role section — tap to re-allot.
 function renderSiderGroupsForRoleSection(){
   var el=document.getElementById('allot-sider-groups'); if(!el)return;
+  el.innerHTML='';return; // sider groups are now edited in the panel above
   if(!allotBride){el.innerHTML='';return;}
   var groups=siderGroupsForEvent(activeDate,allotBride.bride,allotBride.eventNo);
   if(!groups.length){el.innerHTML='<div style="font-size:11px;color:#aaa;margin:4px 0">No sider groups yet for this event.</div>';return;}
@@ -3456,8 +3682,10 @@ function openSiderGroupEditor(ds,bride,eventNo,label,count){
 }
 
 function confirmSidersRole(role){
-  var artist=document.getElementById('artist-sel').value;
-  if(!artist||!activeDate)return;
+  var _sa=document.getElementById('siders-artist');
+  var artist=(_sa&&_sa.value)||document.getElementById('artist-sel').value;
+  if(!artist){toast('Choose the artist for this sider group first');return;}
+  if(!activeDate)return;
   var count=parseInt(document.getElementById('siders-count').value,10)||1;
   var label=document.getElementById('siders-names').value.trim();
   if(!label){toast("Type a sider group name first (e.g. Groom Siders)");return;}
@@ -3498,7 +3726,7 @@ function confirmSidersRole(role){
 
   renderCal();updateSidebar();refreshOpenPanels(artist);renderSiderGroupsForRoleSection();renderAllotDialogSummary();
   toast('Allotted '+role+' — '+label+(applyAll?(' across '+done+' event'+(done>1?'s':'')):''));
-  if(ALLOT_FORM_LINKS[role]){ showAllotFormLink(role); } else { showModalSection('role'); }
+  if(ALLOT_FORM_LINKS[role]){ showAllotFormLink(role,artist); } else { showModalSection('role'); }
 }
 
 function markSel(status){
@@ -3871,7 +4099,7 @@ function renderBookingBlock(b, ds){
       return '<div style="margin-top:8px;padding:9px 11px;background:#F0FAF8;border:1.5px solid #B7E4DC;border-radius:9px">'
         +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px">'
           +'<div style="font-size:10px;font-weight:800;color:#0F9B8E;text-transform:uppercase;letter-spacing:.5px">🧵 Sider</div>'
-          +'<a href="javascript:void(0)" onclick="openSiderGroupEditor(\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\',\''+lblEsc+'\',\''+(g.count||'')+'\')" style="font-size:10px;font-weight:700;color:#A3365A;text-decoration:underline">✎ Edit / re-allot</a>'
+          +'<a href="javascript:void(0)" onclick="openEventEditor(\''+ds+'\',\''+brideEsc+'\',\''+eventNoEsc+'\')" style="font-size:10px;font-weight:700;color:#A3365A;text-decoration:underline">✎ Edit artists</a>'
         +'</div>'
         +(g.label?'<div style="font-size:13px;font-weight:800;color:#222;margin-bottom:2px">'+esc(g.label)+'</div>':'')
         +'<div style="font-size:11px;color:#666;margin-bottom:6px">No. of Sider — '+(g.count?esc(g.count):'—')+'</div>'
@@ -3885,6 +4113,7 @@ function renderBookingBlock(b, ds){
 
   return '<div style="background:'+bgColor+';border-left:4px solid '+borderColor+';border-radius:10px;padding:10px 12px;margin-bottom:10px">'
     +'<div style="font-size:13.5px;font-weight:800;color:#222;margin-bottom:8px">'+esc(b.bride)+(b.makeupBy?' <span style="display:inline-block;font-size:13px;font-weight:800;color:#fff;background:'+mbColor+';border-radius:6px;padding:2px 10px;margin-left:4px;letter-spacing:.2px">'+esc(b.makeupBy)+'</span>':'')+'</div>'
+    +'<div style="margin:-4px 0 6px"><a href="javascript:void(0)" onclick="openEventEditor(\''+ds+'\',\''+b.bride.replace(/'/g,"\\'")+'\',\''+b.eventNo.replace(/'/g,"\\'")+'\')" style="font-size:11px;font-weight:800;color:#A3365A;text-decoration:underline">✎ Edit artists (MA / HA / siders)</a></div>'
     +'<div style="font-size:12px;color:#333">'
       +'<div style="line-height:2.0">'+roleLine('MA')+'</div>'+(roleMap['MA']?blockLine(roleMap['MA'].artist):'')
       +'<div style="line-height:2.0">'+roleLine('HA')+'</div>'+(roleMap['HA']?blockLine(roleMap['HA'].artist):'')
@@ -4040,7 +4269,7 @@ function renderUnavailPage(){
         html+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #F8F0F2;flex-wrap:wrap">';
         html+='<span style="width:8px;height:8px;border-radius:50%;background:'+color+';flex-shrink:0"></span>';
         html+='<span style="font-size:13px;font-weight:700;color:#222">'+esc(item.artist)+'</span>';
-        html+='<span style="font-size:10px;font-weight:700;color:'+color+';background:'+color+'22;border-radius:5px;padding:1px 7px">'+(STATUS_LABEL[item.status]||item.status)+'</span>';
+        html+='<span style="font-size:10px;font-weight:700;color:'+color+';background:'+color+'22;border-radius:5px;padding:1px 7px">'+item.status+'</span>';
         if(item.note)html+='<span style="font-size:11px;color:#888">'+esc(item.note)+'</span>';
         if(item.slots.length && item.slots.length<RT_SLOTS.length){
           html+='<div style="flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px;padding-left:16px;margin-top:3px">'+item.slots.map(function(s){
